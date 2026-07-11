@@ -885,15 +885,19 @@ def cmd_claim(r, args):
     # claim stage moves it back to status:claimed. This runs inside agent loops,
     # so a hard refusal here could wedge a driver — warn and proceed. The
     # explicit `bus status` command is where backward moves are hard-refused.
+    # This warning is advisory, so the early cross-check snapshot is fine even if
+    # slightly stale; the actual label write below still takes its own fresh read.
     claim_current = effective_status(labels)
     if claim_current and status_transition(claim_current, "status:claimed") == "illegal":
         sys.stderr.write(f"note: #{args.issue} was {claim_current}; claiming moves "
                          f"it back to status:claimed\n")
     err = None
     try:
-        # reuse the snapshot read above for the claim cross-check (labels), so
-        # set_status_label doesn't take a second, racier read.
-        set_status_label(args.issue, "status:claimed", current_labels=labels)
+        # NOT current_labels=labels: `labels` was read at the top, before the
+        # lock and worktree setup. Reusing it here would widen the read->write
+        # window and could leave stale labels. Let set_status_label take its own
+        # fresh read immediately before the edit (the established claim behavior).
+        set_status_label(args.issue, "status:claimed")
         gh(["issue", "comment", str(args.issue),
             "--body", f"Claimed by `{args.as_agent}` via bus at {now_iso()}."], check=False)
     except Exception as e:  # noqa: BLE001 - report and continue

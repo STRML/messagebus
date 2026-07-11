@@ -193,7 +193,10 @@ class CmdClaim(unittest.TestCase):
                 rc = bus.cmd_claim(self._r(), self._args())
         self.assertEqual(rc, 0)                       # not blocked
         sset.assert_called_once()                     # label still written
-        self.assertEqual(sset.call_args.kwargs.get("current_labels"), [VERIFIED])  # snapshot reused
+        # the write must NOT reuse the early snapshot (read at the top, before
+        # lock/worktree); set_status_label takes its own fresh read to avoid a
+        # widened read->write window.
+        self.assertNotIn("current_labels", sset.call_args.kwargs)
         self.assertIn("was status:verified", err.getvalue())
 
     def test_claim_on_open_issue_no_warning(self):
