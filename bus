@@ -135,6 +135,42 @@ STATUS_LABELS = [
     "status:merged", "status:deployed", "status:verified",
 ]
 
+# The status pipeline is linear. Forward progress by any distance is always
+# allowed; backward moves and no-op re-sets are refused unless --force, except
+# the two explicit "back to work" edges an abandoned claim or a closed PR needs.
+# This blocks fat-finger regressions (verified -> open) and duplicate re-sets
+# while leaving every real forward workflow untouched.
+_STATUS_INDEX = {label: i for i, label in enumerate(STATUS_LABELS)}
+_STATUS_BACK_EDGES = {
+    ("status:claimed", "status:open"),      # abandon a claim, back to the pool
+    ("status:pr-open", "status:claimed"),   # PR closed -> back to building
+}
+
+
+def status_transition(current, new):
+    """Classify a status move without touching gh or Redis.
+
+    Returns:
+      'noop'    - current == new; the caller should skip the write
+      'ok'      - a legal transition
+      'illegal' - refused unless the caller passes --force
+
+    `current` may be None (no status label yet) or a foreign/stale label; either
+    way any set is 'ok' — we only constrain moves between known pipeline stages.
+    Raises ValueError if `new` is not a known status label.
+    """
+    if new not in _STATUS_INDEX:
+        raise ValueError(f"unknown status label: {new}")
+    if current not in _STATUS_INDEX:
+        return "ok"            # no prior state, or a label we don't manage
+    if current == new:
+        return "noop"
+    if _STATUS_INDEX[new] > _STATUS_INDEX[current]:
+        return "ok"            # forward, any distance
+    if (current, new) in _STATUS_BACK_EDGES:
+        return "ok"
+    return "illegal"
+
 
 def set_status_label(issue, new_label):
     """Add new_label, remove any other status:* label the issue actually has.
@@ -863,6 +899,22 @@ def cmd_release(r, args):
 
 
 def cmd_status(r, args):
+    # Legality gate (ported from agent-bussy's reviewed transition design): read
+    # the LIVE status label and refuse an illegal move so a fat-finger can't send
+    # a verified issue back to open, and a duplicate re-set doesn't re-comment.
+    labels = issue_labels(args.issue)
+    current = next((l for l in (labels or []) if l in STATUS_LABELS), None)
+    verdict = status_transition(current, args.set)
+    if verdict == "noop":
+        print(f"issue #{args.issue} already {args.set} (no change)")
+        return 0
+    if verdict == "illegal" and not args.force:
+        legal = [l for l in STATUS_LABELS if status_transition(current, l) == "ok"]
+        sys.stderr.write(
+            f"refusing {current} -> {args.set} on #{args.issue}: not a legal "
+            f"transition. Legal next: {', '.join(legal) or '(none)'}. "
+            f"Use --force to override.\n")
+        return 1
     set_status_label(args.issue, args.set)
     gh(["issue", "comment", str(args.issue),
         "--body", f"Status -> `{args.set}` by `{args.as_agent}` at {now_iso()}."], check=False)
@@ -1459,6 +1511,8 @@ def build_parser():
     st = sub.add_parser("status", help="transition a gh issue status label")
     _as(st); _issue(st)
     st.add_argument("--set", required=True, choices=STATUS_LABELS)
+    st.add_argument("--force", action="store_true",
+                    help="override the transition-legality check (allow a backward move)")
     st.add_argument("--ttl", type=int, default=28800, help=TTL_HELP)
 
     ws = sub.add_parser("ws", help="per-agent git worktrees for isolated parallel building")

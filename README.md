@@ -237,3 +237,21 @@ code injection.
 | `BUS_AGENT` | — | agent id (used by the Stop hook) |
 | `BUS_WAIT_SECS` | `20`/`60` | hook idle-wait / agent-loop block interval |
 | `BUS_MAX_TURNS` | `200` | hook runaway-loop cap |
+
+## Status transitions
+
+`bus status` moves an issue along the linear pipeline
+`open → claimed → pr-open → merged → deployed → verified`. Forward moves (any
+distance) are always allowed; a backward move or a no-op re-set is refused unless
+you pass `--force`. Two "back to work" edges are always legal without `--force`:
+`claimed → open` (abandon a claim) and `pr-open → claimed` (PR closed, back to
+building). This stops a fat-finger from sending a `verified` issue back to `open`
+and avoids duplicate status comments, without constraining real forward progress.
+
+## Tests
+
+Pure-function tests (no Redis or gh needed) for the status-transition gate:
+
+```bash
+python -m unittest discover -s tests    # from the repo root; needs redis-py importable
+```
