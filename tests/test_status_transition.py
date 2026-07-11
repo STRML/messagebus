@@ -10,7 +10,9 @@ Run:  python -m unittest discover -s tests   (from the repo root)
 import importlib.util
 import importlib.machinery
 import os
+import types
 import unittest
+from unittest import mock
 
 _BUS_PATH = os.path.join(os.path.dirname(__file__), os.pardir, "bus")
 
@@ -107,6 +109,64 @@ class EffectiveStatus(unittest.TestCase):
         # the whole point: a stray extra label can't downgrade enforcement
         current = self.E([OPEN, VERIFIED])
         self.assertEqual(T(current, OPEN), "illegal")
+
+
+class CmdStatus(unittest.TestCase):
+    """Command-path tests: patch gh/redis-touching helpers, drive cmd_status."""
+
+    def _args(self, **kw):
+        base = dict(issue=42, set=OPEN, as_agent="a", force=False, ttl=100, room="main")
+        base.update(kw)
+        return types.SimpleNamespace(**base)
+
+    def _r(self):
+        return types.SimpleNamespace(get=lambda k: None, expire=lambda k, t: None)
+
+    def test_read_failure_refuses_even_with_force(self):
+        # the regression: --force must NOT force a transition we can't read/clean
+        with mock.patch.object(bus, "issue_labels", return_value=None), \
+             mock.patch.object(bus, "set_status_label") as sset, \
+             mock.patch.object(bus, "gh") as g:
+            rc = bus.cmd_status(self._r(), self._args(set=OPEN, force=True))
+        self.assertEqual(rc, 1)
+        sset.assert_not_called()
+        g.assert_not_called()
+
+    def test_forward_passes_single_snapshot_to_set(self):
+        with mock.patch.object(bus, "issue_labels", return_value=[CLAIMED]) as il, \
+             mock.patch.object(bus, "set_status_label") as sset, \
+             mock.patch.object(bus, "gh"), \
+             mock.patch.object(bus, "announce"):
+            rc = bus.cmd_status(self._r(), self._args(set=PR))
+        self.assertEqual(rc, 0)
+        self.assertEqual(il.call_count, 1)  # read exactly once
+        self.assertEqual(sset.call_args.kwargs.get("current_labels"), [CLAIMED])
+
+    def test_illegal_backward_refused_without_force(self):
+        with mock.patch.object(bus, "issue_labels", return_value=[VERIFIED]), \
+             mock.patch.object(bus, "set_status_label") as sset, \
+             mock.patch.object(bus, "gh"):
+            rc = bus.cmd_status(self._r(), self._args(set=OPEN, force=False))
+        self.assertEqual(rc, 1)
+        sset.assert_not_called()
+
+    def test_illegal_backward_allowed_with_force(self):
+        with mock.patch.object(bus, "issue_labels", return_value=[VERIFIED]), \
+             mock.patch.object(bus, "set_status_label") as sset, \
+             mock.patch.object(bus, "gh"), \
+             mock.patch.object(bus, "announce"):
+            rc = bus.cmd_status(self._r(), self._args(set=OPEN, force=True))
+        self.assertEqual(rc, 0)
+        sset.assert_called_once()
+
+    def test_noop_skips_write(self):
+        with mock.patch.object(bus, "issue_labels", return_value=[CLAIMED]), \
+             mock.patch.object(bus, "set_status_label") as sset, \
+             mock.patch.object(bus, "gh") as g:
+            rc = bus.cmd_status(self._r(), self._args(set=CLAIMED))
+        self.assertEqual(rc, 0)
+        sset.assert_not_called()
+        g.assert_not_called()
 
 
 if __name__ == "__main__":

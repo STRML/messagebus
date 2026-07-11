@@ -926,12 +926,15 @@ def cmd_status(r, args):
     # the LIVE status ONCE and refuse an illegal move so a fat-finger can't send
     # a verified issue back to open, and a duplicate re-set doesn't re-comment.
     labels = issue_labels(args.issue)
-    if labels is None and not args.force:
-        # read failed -> we cannot verify legality. Fail CLOSED: refuse rather
-        # than let a backward move slip through unverified. --force overrides.
+    if labels is None:
+        # read failed -> we can neither verify legality NOR know which old label
+        # to remove for a clean transition. --force overrides legality, not
+        # un-readability (forcing here would leave BOTH the old and new label and
+        # announce a state that effective_status doesn't agree with). Refuse and
+        # let the operator retry when gh is reachable.
         sys.stderr.write(
-            f"could not read the current status of #{args.issue} to verify the "
-            f"transition to {args.set}; refusing. Use --force to override.\n")
+            f"could not read the current status of #{args.issue}; cannot apply "
+            f"the transition to {args.set} cleanly. Retry when gh is reachable.\n")
         return 1
     current = effective_status(labels)
     verdict = status_transition(current, args.set)
