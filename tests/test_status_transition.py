@@ -169,5 +169,46 @@ class CmdStatus(unittest.TestCase):
         g.assert_not_called()
 
 
+class CmdClaim(unittest.TestCase):
+    """Acquire-path policy: a claim that backslides warns but is NOT blocked."""
+
+    def _args(self, **kw):
+        base = dict(issue=42, as_agent="a", ttl=100, room="main", worktree=False, base="dev")
+        base.update(kw)
+        return types.SimpleNamespace(**base)
+
+    def _r(self):
+        return types.SimpleNamespace(
+            set=lambda *a, **k: True, get=lambda k: None, delete=lambda k: None)
+
+    def test_claim_on_late_issue_warns_but_proceeds(self):
+        import io
+        import contextlib
+        with mock.patch.object(bus, "issue_labels", return_value=[VERIFIED]), \
+             mock.patch.object(bus, "set_status_label") as sset, \
+             mock.patch.object(bus, "gh"), \
+             mock.patch.object(bus, "announce"):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = bus.cmd_claim(self._r(), self._args())
+        self.assertEqual(rc, 0)                       # not blocked
+        sset.assert_called_once()                     # label still written
+        self.assertEqual(sset.call_args.kwargs.get("current_labels"), [VERIFIED])  # snapshot reused
+        self.assertIn("was status:verified", err.getvalue())
+
+    def test_claim_on_open_issue_no_warning(self):
+        import io
+        import contextlib
+        with mock.patch.object(bus, "issue_labels", return_value=[OPEN]), \
+             mock.patch.object(bus, "set_status_label"), \
+             mock.patch.object(bus, "gh"), \
+             mock.patch.object(bus, "announce"):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = bus.cmd_claim(self._r(), self._args())
+        self.assertEqual(rc, 0)
+        self.assertNotIn("moves it back", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

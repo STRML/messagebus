@@ -881,9 +881,19 @@ def cmd_claim(r, args):
             return 1
     # We won the lock. Reflect to gh + announce. If gh fails, keep the lock
     # (the announce still tells others), but surface the error.
+    # Surface (but don't block) a backslide: claiming an issue already past the
+    # claim stage moves it back to status:claimed. This runs inside agent loops,
+    # so a hard refusal here could wedge a driver — warn and proceed. The
+    # explicit `bus status` command is where backward moves are hard-refused.
+    claim_current = effective_status(labels)
+    if claim_current and status_transition(claim_current, "status:claimed") == "illegal":
+        sys.stderr.write(f"note: #{args.issue} was {claim_current}; claiming moves "
+                         f"it back to status:claimed\n")
     err = None
     try:
-        set_status_label(args.issue, "status:claimed")
+        # reuse the snapshot read above for the claim cross-check (labels), so
+        # set_status_label doesn't take a second, racier read.
+        set_status_label(args.issue, "status:claimed", current_labels=labels)
         gh(["issue", "comment", str(args.issue),
             "--body", f"Claimed by `{args.as_agent}` via bus at {now_iso()}."], check=False)
     except Exception as e:  # noqa: BLE001 - report and continue
@@ -1315,7 +1325,13 @@ def cmd_huddle_open(r, args):
     # outage must not abort a live huddle (mirrors cmd_claim).
     err = None
     try:
-        set_status_label(issue, "status:claimed")
+        # Same acquire-path policy as cmd_claim: warn on a backslide, don't block.
+        h_labels = issue_labels(issue)
+        h_current = effective_status(h_labels)
+        if h_current and status_transition(h_current, "status:claimed") == "illegal":
+            sys.stderr.write(f"note: #{issue} was {h_current}; opening a huddle "
+                             f"moves it back to status:claimed\n")
+        set_status_label(issue, "status:claimed", current_labels=h_labels)
         gh(["issue", "comment", str(issue),
             "--body", f"Huddle opened by `{args.as_agent}` via bus at {now_iso()} "
                       f"(branch `{branch}`)."], check=False)

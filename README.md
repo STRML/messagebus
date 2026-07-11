@@ -251,6 +251,12 @@ overrides legality, not an unreadable state; retry when gh is reachable). This
 stops a fat-finger from sending a `verified` issue back to `open`, without
 constraining real forward progress.
 
+`bus claim` and huddle-open also set `status:claimed`, but they run inside agent
+loops where a hard refusal could wedge a driver mid-task. So on those acquire
+paths a backslide (claiming an issue already past `claimed`) is a **warning**,
+not a block — the explicit `bus status` command is the one place a backward move
+is refused. huddle-close advances to `pr-open` (forward by construction).
+
 ## Tests
 
 Pure-function tests (no Redis or gh needed) for the status-transition gate:
