@@ -242,11 +242,13 @@ code injection.
 
 `bus status` moves an issue along the linear pipeline
 `open → claimed → pr-open → merged → deployed → verified`. Forward moves (any
-distance) are always allowed; a backward move or a no-op re-set is refused unless
-you pass `--force`. Two "back to work" edges are always legal without `--force`:
-`claimed → open` (abandon a claim) and `pr-open → claimed` (PR closed, back to
-building). This stops a fat-finger from sending a `verified` issue back to `open`
-and avoids duplicate status comments, without constraining real forward progress.
+distance) are always allowed; a no-op re-set of the current label is skipped (no
+duplicate comment); a backward move is refused unless you pass `--force`. Two
+"back to work" edges are always legal without `--force`: `claimed → open`
+(abandon a claim) and `pr-open → claimed` (PR closed, back to building). If the
+current label can't be read, the move is refused unless `--force`. This stops a
+fat-finger from sending a `verified` issue back to `open`, without constraining
+real forward progress.
 
 ## Tests
 

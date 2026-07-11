@@ -83,5 +83,31 @@ class StatusTransition(unittest.TestCase):
         self.assertEqual([l for l in bus.STATUS_LABELS if T(VERIFIED, l) == "ok"], [])
 
 
+class EffectiveStatus(unittest.TestCase):
+    E = staticmethod(bus.effective_status)
+
+    def test_none_and_empty(self):
+        self.assertIsNone(self.E(None))
+        self.assertIsNone(self.E([]))
+
+    def test_ignores_foreign_labels(self):
+        self.assertIsNone(self.E(["needs-triage", "bug"]))
+        self.assertEqual(self.E(["bug", OPEN]), OPEN)
+
+    def test_single_status_label(self):
+        self.assertEqual(self.E([CLAIMED]), CLAIMED)
+
+    def test_picks_furthest_along_when_multiple(self):
+        # order-independent: the max pipeline stage wins, not gh's list order
+        self.assertEqual(self.E([OPEN, VERIFIED]), VERIFIED)
+        self.assertEqual(self.E([VERIFIED, OPEN]), VERIFIED)
+        self.assertEqual(self.E([CLAIMED, PR, OPEN]), PR)
+
+    def test_furthest_along_makes_backward_still_illegal(self):
+        # the whole point: a stray extra label can't downgrade enforcement
+        current = self.E([OPEN, VERIFIED])
+        self.assertEqual(T(current, OPEN), "illegal")
+
+
 if __name__ == "__main__":
     unittest.main()
