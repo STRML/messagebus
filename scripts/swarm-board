@@ -87,7 +87,9 @@ def short_count(value):
 def usage_text(tokens, cost, cached=0):
     parts = []
     if tokens:
-        parts.append(f"{short_count(tokens)} tok" + (f" +{short_count(cached)} cached" if cached else ""))
+        parts.append(f"{short_count(tokens)} tok")
+    if cached:
+        parts.append(f"+{short_count(cached)} cached")
     if cost:
         parts.append(f"${cost:.2f}")
     return " · ".join(parts)
@@ -539,7 +541,8 @@ def status_text(state, name, now):
 
 def name_line(state, name, colw):
     color = state.color(name)
-    right = usage_text(*state.member_usage(name))
+    tokens, cost, _ = state.member_usage(name)
+    right = usage_text(tokens, cost)
     crown = " ♛" if state.is_coordinator(name) else ""
     room = colw - 2 - len(crown) - (len(right) + 1 if right else 0)
     head = Text()
