@@ -289,7 +289,7 @@ bus join     --as A                          # register presence; cursor to "now
 bus agents                                   # who is present
 bus roster                                   # members: role, harness, model, state, groups, presence
 bus state    --as A working|waiting|retired [--doing "what I'm on"]
-bus usage    --as A --tokens-in N --tokens-out N [--cost USD]   # add one turn to A's totals
+bus usage    --as A --tokens-in N --tokens-out N [--tokens-cached N] [--cost USD]   # add one turn to A's totals
 bus title    ["Room title"]                  # print or set
 
 # task coordination (needs BUS_GH_REPO + gh)
