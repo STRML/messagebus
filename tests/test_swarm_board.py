@@ -539,6 +539,7 @@ class PureHelperTests(unittest.TestCase):
         self.assertEqual(board.usage_text(128000, 0.42, 874000), "128k tok · +874k cached · $0.42")
         self.assertEqual(board.usage_text(0, 0, 874000), "+874k cached")
 
+    @unittest.skipIf(fakeredis is None, "fakeredis/textual not installed")
     def test_to_number_treats_unparseable_and_infinite_as_zero(self):
         for bad in (None, "x", "inf", "1e309"):
             self.assertEqual(board.to_number(bad), 0)
