@@ -5,3 +5,7 @@
 # The suite skips itself cleanly if this is absent, so it's optional for the
 # pure-function suites but required to exercise the Redis-backed gate logic.
 fakeredis>=2.0
+
+# Terminal swarm board (scripts/swarm-board) and its pilot tests
+# (tests/test_swarm_board.py), which skip cleanly if this is absent.
+textual>=8
