@@ -98,7 +98,7 @@ def usage_text(tokens, cost, cached=0):
 def to_number(value, kind=int):
     try:
         return kind(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return kind(0)
 
 
