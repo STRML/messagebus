@@ -84,10 +84,10 @@ def short_count(value):
             return f"{scaled:.0f}{unit}" if scaled >= 100 else f"{scaled:.1f}".removesuffix(".0") + unit
 
 
-def usage_text(tokens, cost):
+def usage_text(tokens, cost, cached=0):
     parts = []
     if tokens:
-        parts.append(f"{short_count(tokens)} tok")
+        parts.append(f"{short_count(tokens)} tok" + (f" +{short_count(cached)} cached" if cached else ""))
     if cost:
         parts.append(f"${cost:.2f}")
     return " · ".join(parts)
@@ -313,11 +313,11 @@ class BoardState:
     def member_usage(self, name):
         info = self.info(name)
         tokens = to_number(info.get("tokens_in")) + to_number(info.get("tokens_out"))
-        return tokens, to_number(info.get("cost_usd"), float)
+        return tokens, to_number(info.get("cost_usd"), float), to_number(info.get("tokens_cached"))
 
     def total_usage(self):
         usages = [self.member_usage(n) for n in self.roster()]
-        return sum(u[0] for u in usages), sum(u[1] for u in usages)
+        return tuple(sum(u[i] for u in usages) for i in range(3))
 
     def doing(self, name):
         doing = self.info(name).get("doing", "").strip()

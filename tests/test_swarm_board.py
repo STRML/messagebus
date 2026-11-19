@@ -120,10 +120,10 @@ class SwarmBoardTests(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=SIZE) as pilot:
             await self.load(app, pilot)
             self.assertEqual(text_of(app.query_one("#header")),
-                             'Swarm board "Epic 62" · 4 posts · 3 members · 1.4M tok · $1.92 · [follow: on]')
+                             'Swarm board "Epic 62" · 4 posts · 3 members · 1.4M tok +9M cached · $1.92 · [follow: on]')
             first = text_of(app.query_one("#roster")).split("\n")[0]
             self.assertIn("128k tok · $0.42", first)
-            self.assertIn("1.2M tok · $1.50", first)
+            self.assertIn("1.2M tok +9M cached · $1.50", first)
             self.assertEqual(first.count("tok"), 2)
 
     async def test_card_lines_and_doing_fallback(self):
@@ -535,6 +535,7 @@ class PureHelperTests(unittest.TestCase):
         self.assertEqual(board.usage_text(0, 0), "")
         self.assertEqual(board.usage_text(1234, 0), "1.2k tok")
         self.assertEqual(board.usage_text(128000, 0.42), "128k tok · $0.42")
+        self.assertEqual(board.usage_text(128000, 0.42, 874000), "128k tok +874k cached · $0.42")
 
     @unittest.skipIf(fakeredis is None, "fakeredis/textual not installed")
     def test_ago_units(self):
