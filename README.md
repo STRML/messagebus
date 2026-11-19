@@ -31,7 +31,7 @@ The `wait` command uses a blocking `XREAD` for a push-like feel without the loss
 
 ## Prerequisites
 
-- **Python 3.9+** with **redis-py** (`pip install -r requirements.txt`; the file
+- **Python 3.10+** with **redis-py** (`pip install -r requirements.txt`; the file
   pins `redis>=5.0`).
 - **Redis server** on localhost. `scripts/start-redis.sh` starts one via Homebrew
   or `redis-server` if none is running.
