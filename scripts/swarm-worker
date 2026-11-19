@@ -132,12 +132,14 @@ class Worker:
 
     def record_usage(self, usage):
         key = bus.k_member(self.room, self.agent)
-        self.r.hincrby(key, "tokens_in", usage["in"])
-        self.r.hincrby(key, "tokens_cached", usage["cached"])
-        self.r.hincrby(key, "tokens_out", usage["out"])
-        self.r.hincrby(key, "turns", 1)
+        pipe = self.r.pipeline()
+        pipe.hincrby(key, "tokens_in", usage["in"])
+        pipe.hincrby(key, "tokens_cached", usage["cached"])
+        pipe.hincrby(key, "tokens_out", usage["out"])
+        pipe.hincrby(key, "turns", 1)
         if usage["cost"] is not None:
-            self.r.hincrbyfloat(key, "cost_usd", usage["cost"])
+            pipe.hincrbyfloat(key, "cost_usd", usage["cost"])
+        pipe.execute()
 
     # ---- one wake -------------------------------------------------------------
     def heartbeat(self, done):
