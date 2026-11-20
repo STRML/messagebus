@@ -160,8 +160,10 @@ class SwarmSpawnE2E(BusE2E):
 
 class SwarmSpawnArgsTest(unittest.TestCase):
     def test_spawn_requires_a_room(self):
-        res = subprocess.run([sys.executable, SPAWN, "--as", "w4"], capture_output=True, text=True,
-                             env=dict(os.environ, BUS_ROOM="main"), timeout=30)
+        dead_redis = "redis://127.0.0.1:1/0"
+        res = subprocess.run([sys.executable, SPAWN, "--url", dead_redis, "--as", "w4"], capture_output=True,
+                             text=True, env=dict(os.environ, BUS_ROOM="main", BUS_BIN=os.path.join(ROOT, "bus")),
+                             timeout=30)
         self.assertEqual(res.returncode, 2)
         self.assertIn("--room", res.stderr)
 
