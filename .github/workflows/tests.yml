@@ -8,6 +8,13 @@ on:
 jobs:
   unittest:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      BUS_TEST_REQUIRE_REDIS: "1"
     strategy:
       fail-fast: false
       matrix:
