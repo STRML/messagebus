@@ -150,6 +150,14 @@ class SwarmSpawnE2E(BusE2E):
         self.assertIn("took over 20s", res.stderr)
         self.assertFalse(self.r.exists(f"bus:member:{self.room}:w1"))
 
+    def test_spawn_requires_a_room(self):
+        env = {k: v for k, v in self.env.items() if k != "BUS_ROOM"}
+        res = subprocess.run([sys.executable, SPAWN, "--url", URL, "--as", "w4"], capture_output=True, text=True,
+                             env=dict(env, BUS_ROOM="main"), timeout=30)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("--room", res.stderr)
+        self.assertFalse(self.r.exists("bus:member:main:w4"))
+
     def test_spawn_rejects_unknown_seat(self):
         res = subprocess.run([sys.executable, SPAWN, "--url", URL, "--room", self.room, "--as", "w3",
                               "--harness", "nope"], capture_output=True, text=True, env=self.env)
