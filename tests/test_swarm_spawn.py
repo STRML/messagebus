@@ -115,7 +115,8 @@ class SwarmSpawnE2E(BusE2E):
     def test_respawn_after_the_worker_died_keeps_the_cursor(self):
         out = self.spawn("--as", "w1", "--harness", "cmd")
         self.bus("send", "--from", "coord", "--to", "w1", "first")
-        self.wait_for(lambda: self.member().get("turns") == "1")
+        first_id = self.r.xrevrange(f"bus:stream:{self.room}", count=1)[0][0]
+        self.wait_for(lambda: stream_order(self.r.get(f"bus:cursor:{self.room}:w1")) >= stream_order(first_id))
         os.kill(out["pid"], signal.SIGKILL)
         self.wait_for(lambda: subprocess.run(["kill", "-0", str(out["pid"])], capture_output=True).returncode)
         self.spawn("--as", "w1", "--harness", "cmd")
@@ -157,6 +158,10 @@ class SwarmSpawnE2E(BusE2E):
         self.assertIn("no seat 'nope'", res.stderr)
 
 
+
+def stream_order(entry_id):
+    """A Redis stream id as a sortable tuple; None (no cursor yet) sorts first."""
+    return tuple(int(part) for part in (entry_id or "0-0").split("-"))
 
 class SwarmSpawnArgsTest(unittest.TestCase):
     def test_spawn_requires_a_room(self):
