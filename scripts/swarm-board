@@ -1117,7 +1117,7 @@ class RoomPicker(App):
             row = next((r for r in self.rooms if r["room"] == self.pending), None)
             count = row["messages"] if row else 0
             line = Text(f'Clear "{clean(self.pending)}" and its {plural(count, "message")} for good? '
-                        "press y to confirm, any other key cancels", style=f"bold {GOLD}")
+                        "press y to confirm, esc cancels", style=f"bold {GOLD}")
         elif self.error:
             line = Text(self.error, style="bold #ff7b72")
         else:
@@ -1136,6 +1136,8 @@ class RoomPicker(App):
         self.render_status()
 
     def on_data_table_row_selected(self, event):
+        if self.drop_prompt():
+            return
         self.exit(event.row_key.value)
 
     def on_key(self, event):

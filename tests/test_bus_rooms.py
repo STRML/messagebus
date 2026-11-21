@@ -14,7 +14,6 @@ before it or wholly after it):
 import importlib.machinery
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 import threading
@@ -101,6 +100,17 @@ class RoomsE2E(BusE2E):
         self.assertLess(names.index(newer), names.index(older))
         out = self.cli("rooms").stdout.splitlines()
         self.assertTrue(any(line.startswith(f"{newer}\t") for line in out))
+        self.assertEqual(out[0], "ROOM\tTITLE\tMESSAGES\tLAST_ACTIVITY\tPRESENT")
+
+    def test_archived_plain_output_has_a_header_and_an_expiry_date(self):
+        self.fill(self.room)
+        self.assertEqual(self.cli("--room", self.room, "archive").returncode, 0)
+        out = self.cli("rooms", "--archived").stdout.splitlines()
+        self.assertEqual(out[0], "ARCHIVE_ID\tTITLE\tMESSAGES\tARCHIVED\tEXPIRES")
+        line = next(line for line in out if line.startswith(f"{self.room}:"))
+        expires = line.split("\t")[4]
+        self.assertRegex(expires, r"^\d{4}-\d\d-\d\dT")
+        self.assertGreater(expires, line.split("\t")[3])
 
     # ---- archive / unarchive ------------------------------------------------------------------------------
 
