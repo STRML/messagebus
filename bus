@@ -724,6 +724,10 @@ if idle then
   if #last > 0 and now - tonumber(last[1][1]:match("^(%d+)-")) < idle then return {"active"} end
 end
 local archive_id = room .. ":" .. string.format("%.0f", now)
+while redis.call("EXISTS", "bus:archived:" .. archive_id .. ":" .. stream) == 1 do
+  now = now + 1
+  archive_id = room .. ":" .. string.format("%.0f", now)
+end
 local prefix = "bus:archived:" .. archive_id .. ":"
 local keys = agent_keys(room, {"member", "groups"})
 keys[#keys + 1] = stream
@@ -767,22 +771,32 @@ return {"ok", removed}
 """
 
 
-def env_number(name, default):
+MAX_RETAIN_DAYS = 3650    # ten years; keeps EXPIRE inside Redis's range, so a script never half-moves a room
+MAX_IDLE_HOURS = 87600    # ten years
+
+
+def bounded_number(text, maximum):
+    """float(text) if it is a finite number in [0, maximum], else None."""
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if 0 <= value <= maximum else None
+
+
+def env_number(name, default, maximum):
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
-    try:
-        value = float(raw)
-    except ValueError:
-        value = -1.0
-    if not value >= 0:
-        sys.stderr.write(f"bus: {name}={raw!r} must be a number >= 0\n")
+    value = bounded_number(raw, maximum)
+    if value is None:
+        sys.stderr.write(f"bus: {name}={raw!r} must be a number from 0 to {maximum}\n")
         raise SystemExit(2)
     return value
 
 
 def archive_retain_seconds():
-    days = env_number("BUS_ARCHIVE_RETAIN_DAYS", 7)
+    days = env_number("BUS_ARCHIVE_RETAIN_DAYS", 7, MAX_RETAIN_DAYS)
     if days <= 0:
         sys.stderr.write("bus: BUS_ARCHIVE_RETAIN_DAYS must be greater than 0\n")
         raise SystemExit(2)
@@ -790,7 +804,7 @@ def archive_retain_seconds():
 
 
 def archive_idle_hours():
-    return env_number("BUS_ARCHIVE_IDLE_HOURS", 6)
+    return env_number("BUS_ARCHIVE_IDLE_HOURS", 6, MAX_IDLE_HOURS)
 
 
 def archive_room(r, room, retain_seconds, force=False, idle_ms=None):
@@ -2274,13 +2288,10 @@ def archive_id(value):
     return value
 
 
-def non_negative_float(value):
-    try:
-        number = float(value)
-    except ValueError:
-        number = -1.0
-    if not number >= 0:
-        raise argparse.ArgumentTypeError(f"'{value}' must be a number >= 0")
+def idle_hours(value):
+    number = bounded_number(value, MAX_IDLE_HOURS)
+    if number is None:
+        raise argparse.ArgumentTypeError(f"'{value}' must be a number from 0 to {MAX_IDLE_HOURS}")
     return number
 
 
@@ -2351,7 +2362,7 @@ def build_parser():
     ar = sub.add_parser("archive", help="hide a room now (--room R) or sweep idle rooms (--idle-hours N); kept for a retention window")
     # SUPPRESS keeps the global --room when this one is absent, so `bus --room R archive` and `bus archive --room R` both work
     ar.add_argument("--room", type=ident, default=argparse.SUPPRESS, help="the room to archive (required, no default)")
-    ar.add_argument("--idle-hours", type=non_negative_float, default=None,
+    ar.add_argument("--idle-hours", type=idle_hours, default=None,
                     help="archive every room idle longer than N hours with nobody present (0 disables)")
     ar.add_argument("--force", action="store_true", help="archive even though members are present")
     un = sub.add_parser("unarchive", help="bring an archived room back (refuses if the live name is taken)")

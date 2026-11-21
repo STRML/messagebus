@@ -139,12 +139,31 @@ class RoomsE2E(BusE2E):
         ttl = self.r.ttl(self.archive_keys()[0])
         self.assertTrue(86400 < ttl <= 2 * 86400, ttl)
 
-    def test_bad_retention_env_is_an_error(self):
-        self.fill(self.room)
-        res = self.cli("--room", self.room, "archive", BUS_ARCHIVE_RETAIN_DAYS="soon")
-        self.assertEqual(res.returncode, 2)
-        self.assertIn("BUS_ARCHIVE_RETAIN_DAYS", res.stderr)
+    def test_bad_retention_or_idle_env_is_an_error_before_anything_moves(self):
+        self.fill(self.room, age_ms=48 * 3_600_000)
+        for name, value in (("BUS_ARCHIVE_RETAIN_DAYS", "soon"), ("BUS_ARCHIVE_RETAIN_DAYS", "inf"),
+                            ("BUS_ARCHIVE_RETAIN_DAYS", "1e15"), ("BUS_ARCHIVE_RETAIN_DAYS", "0"),
+                            ("BUS_ARCHIVE_IDLE_HOURS", "nan"), ("BUS_ARCHIVE_IDLE_HOURS", "1e400")):
+            for cmd in (("--room", self.room, "archive"), ("rooms",)):
+                if name == "BUS_ARCHIVE_IDLE_HOURS" and cmd[-1] == "archive":
+                    continue
+                res = self.cli(*cmd, **{name: value})
+                self.assertEqual(res.returncode, 2, (name, value, cmd, res.stderr))
+                self.assertIn(name, res.stderr)
+        self.assertEqual(self.cli("archive", "--idle-hours", "inf").returncode, 2)
         self.assertEqual(self.r.exists(f"bus:stream:{self.room}"), 1)
+
+    def test_two_archives_in_the_same_millisecond_never_overwrite_each_other(self):
+        mod = load_bus()
+        self.fill(self.room, count=2)
+        now = int(time.time() * 1000)
+        taken = [f"bus:archived:{self.room}:{ms}:bus:stream:{self.room}" for ms in range(now - 50, now + 400)]
+        self.r.mset({key: "first archive" for key in taken})
+        result = mod.archive_room(self.r, self.room, 60)
+        self.assertEqual(result["status"], "ok")
+        self.assertNotIn(f"bus:archived:{result['archive_id']}:bus:stream:{self.room}", taken)
+        self.assertEqual({self.r.get(key) for key in taken}, {"first archive"})
+        self.assertEqual(self.r.xlen(f"bus:archived:{result['archive_id']}:bus:stream:{self.room}"), 2)
 
     def test_archive_refuses_while_a_member_is_present_and_force_overrides(self):
         self.fill(self.room)
