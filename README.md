@@ -46,7 +46,7 @@ The `wait` command uses a blocking `XREAD` for a push-like feel without the loss
 ## Install & setup
 
 ```bash
-git clone https://github.com/LJK-Consulting-Services/messagebus.git
+git clone https://github.com/STRML/messagebus.git
 cd messagebus
 pip install -r requirements.txt        # redis-py
 
@@ -176,7 +176,7 @@ Claude Code plugin, `messagebus-coordinator`, and is its own plugin marketplace.
 From any Claude Code session:
 
 ```
-/plugin marketplace add LJK-Consulting-Services/messagebus
+/plugin marketplace add STRML/messagebus
 /plugin install messagebus-coordinator@messagebus
 ```
 
