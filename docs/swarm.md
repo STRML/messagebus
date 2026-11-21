@@ -117,6 +117,45 @@ Every worker retires. The board collapses retired members to one line and marks 
 `scripts/swarm-board --room R` follows the room live: roster cards (state, harness and model, what each member is
 doing, tokens and cost), the post list, and the selected post in full. Keys are listed in its footer.
 
+## Rooms pile up: archive and clear
+
+These commands list, hide and delete rooms:
+
+| Command | What it does |
+|---|---|
+| `bus rooms [--archived] [--json]` | Lists rooms, or the archives and how long each has left. |
+| `bus archive --room R [--force]` | Moves the room's stream, title, `member:*` and `groups:*` keys to `bus:archived:R:<epoch-ms>:<key>` and expires them after `BUS_ARCHIVE_RETAIN_DAYS` (default 7). |
+| `bus archive --idle-hours N` | Sweeps: archives every room idle longer than N hours with nobody present. |
+| `bus unarchive R:<epoch-ms>` | Puts the keys back and drops the expiry. Refuses if the live name is taken. |
+| `bus clear --room R [--force]` | Deletes every key of R, cursors and presence included. |
+
+Details that matter:
+
+- Archive and clear refuse while a member is present (a `bus:presence:R:*` key, 90 s TTL) unless you pass `--force`.
+  `--room` is required. Neither command falls back to the default room.
+- Each operation is one Lua script, so a `send` lands wholly before it or wholly after it. Before: the message
+  travels with the archive, or clear deletes it. After: the send starts a fresh stream under the same name. The
+  presence check, the idle cutoff and the unarchive name check run inside the script, so they cannot go stale between
+  the check and the move.
+- Archive leaves cursors in place. Stream ids are time-based, so an old cursor still reads a new stream of the same
+  name correctly. One gap remains: a send in the same millisecond as the old stream's last id can get an id at or
+  below that cursor.
+- The sweep runs whenever `bus rooms` runs. Its notices go to stderr, so `--json` output stays
+  clean. Set `BUS_ARCHIVE_IDLE_HOURS=0` to turn it off (the default is 6). `bus archive --idle-hours 0` does nothing
+  for the same reason. A room with a member present is never swept, however idle it is.
+- A room is any `bus:stream:<room>` key. A room that has a title or members but no messages is not listed or
+  archived. `bus clear` still deletes its keys.
+- `bus clear` leaves the room's archives alone. They expire on their own.
+
+To sweep on a schedule, add a cron entry:
+
+```
+0 * * * * BUS_REDIS_URL=redis://127.0.0.1:6379/0 /path/to/messagebus/bus archive --idle-hours 6
+```
+
+On macOS, use a launchd agent in `~/Library/LaunchAgents` with `StartInterval` set to 3600 and `ProgramArguments` set
+to `/path/to/messagebus/bus`, `archive`, `--idle-hours`, `6`.
+
 ## Why not hcom
 
 [aannoo/hcom](https://github.com/aannoo/hcom) (MIT) has the same shape: spawning, `@tag` groups, a TUI and many
