@@ -151,6 +151,27 @@ class PickerDisplayTests(unittest.IsolatedAsyncioTestCase):
         archive.assert_not_called()
         clear.assert_not_called()
 
+    async def test_enter_during_the_clear_prompt_cancels_instead_of_opening_the_room(self):
+        app = self.make_app()
+        with mock.patch.object(board.bus, "clear_room") as clear:
+            async with app.run_test(size=SIZE) as pilot:
+                await self.load(app, pilot)
+                await pilot.press("x", "enter")
+                await pilot.pause()
+                self.assertTrue(app.is_running)
+                self.assertIsNone(app.pending)
+                self.assertEqual(app.query_one("#status").content.plain, "cancelled")
+        clear.assert_not_called()
+
+    async def test_the_clear_prompt_names_the_keys_that_work(self):
+        app = self.make_app()
+        async with app.run_test(size=SIZE) as pilot:
+            await self.load(app, pilot)
+            await pilot.press("x", "down")
+            await pilot.pause()
+            self.assertIsNotNone(app.pending)
+            self.assertIn("y to confirm, esc cancels", app.query_one("#status").content.plain)
+
     async def test_a_redis_error_clears_from_the_status_line_once_polling_recovers(self):
         app = self.make_app()
         async with app.run_test(size=SIZE) as pilot:
@@ -222,6 +243,12 @@ class PickerWritesE2E(unittest.IsolatedAsyncioTestCase):
         self.tag = "swt-" + uuid.uuid4().hex[:8]
         self.rooms = {name: f"{self.tag}-{name}" for name in ("idle", "busy", "fresh")}
 
+    def claim_sweep_db(self):
+        """The sweep archives every idle room in its db, so run it only on an empty db. It never deletes keys
+        it did not write; tearDown removes this test's own."""
+        if self.sweep_r.dbsize():
+            self.skipTest("db 14 is not empty; the sweep would archive rooms this test did not write")
+
     def tearDown(self):
         for client in (self.r, self.sweep_r):
             for key in client.scan_iter(match=f"bus:*:{self.tag}*"):
@@ -274,6 +301,7 @@ class PickerWritesE2E(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.r.scan_iter(match=f"bus:*:{room}*")), [])
 
     async def test_opening_the_picker_sweeps_idle_rooms_but_never_present_ones(self):
+        self.claim_sweep_db()
         seed(self.sweep_r, self.rooms["idle"], age_ms=8 * HOUR_MS)
         seed(self.sweep_r, self.rooms["busy"], age_ms=8 * HOUR_MS, present=1)
         seed(self.sweep_r, self.rooms["fresh"])

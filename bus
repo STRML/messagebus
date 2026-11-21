@@ -877,6 +877,7 @@ def list_archived(r):
         rows.append({"archive_id": archive_id, "room": room, "archived_ms": int(stamp), "archived": iso_from_ms(int(stamp)),
                      "title": r.hget(f"{ARCHIVE_PREFIX}{archive_id}:{k_meta(room)}", "title") or "",
                      "messages": r.xlen(key), "expires_in": max(r.ttl(key), 0)})
+        rows[-1]["expires"] = iso_from_ms(int(time.time() * 1000) + rows[-1]["expires_in"] * 1000)
     return sorted(rows, key=lambda row: row["archived_ms"], reverse=True)
 
 
@@ -906,7 +907,7 @@ def report_swept(swept):
 def cmd_rooms(r, args):
     if args.archived:
         rows = list_archived(r)
-        columns = ("archive_id", "title", "messages", "archived", "expires_in")
+        columns = ("archive_id", "title", "messages", "archived", "expires")
     else:
         report_swept(sweep_idle(r, archive_idle_hours(), archive_retain_seconds()))
         rows = list_rooms(r)
@@ -914,6 +915,10 @@ def cmd_rooms(r, args):
     if args.json:
         print(json.dumps(rows))
         return 0
+    if not rows:
+        print("no archived rooms" if args.archived else "no rooms")
+        return 0
+    print("\t".join(c.upper() for c in columns))
     for row in rows:
         print("\t".join(terminal_line(str(row[c]) or "-") for c in columns))
     return 0
