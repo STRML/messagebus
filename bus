@@ -22,6 +22,10 @@ Commands:
   thread   print the full reply_to thread containing a message id
   inbox    peek unread messages for you (directed or questions); cursor untouched
   prune    trim a room to the newest --keep messages (destructive, guarded)
+  rooms    list rooms (title, messages, last activity, present); --archived lists archives
+  archive  hide a room now (--room R) or sweep idle ones (--idle-hours N); kept for a retention window
+  unarchive  bring an archived room back by its archive id
+  clear    delete a room and every key of it (destructive, guarded)
   join     register presence and set your cursor to "now" (--replay: the start; --group/--role/--model ...)
   agents   list agents currently present in a room
   state    set your roster state (working | waiting)
@@ -44,6 +48,8 @@ must not be defeated by an agent's own scoping.
 Config via env:
   BUS_REDIS_URL   default redis://127.0.0.1:6379/0
   BUS_ROOM        default "main"
+  BUS_ARCHIVE_RETAIN_DAYS  how long an archived room is kept, default 7
+  BUS_ARCHIVE_IDLE_HOURS   idle time before the sweep archives a room, default 6 (0 disables it)
 """
 
 import argparse
@@ -51,6 +57,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 
 try:
@@ -663,6 +670,314 @@ def cmd_prune(r, args):
     # check.
     removed = xtrim_minid(r, stream, boundary)
     print(f"pruned room {args.room}: removed {removed}, kept {r.xlen(stream)} (was {total})")
+    return 0
+
+
+# ---- rooms: list, archive, unarchive, clear -------------------------------
+
+ARCHIVE_PREFIX = "bus:archived:"
+ARCHIVE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+:[0-9]+$")
+
+# Every script runs as one atomic unit, so a concurrent `send`, `join` or sweep lands wholly before it or wholly
+# after it. The presence check, the idle cutoff and the "live name taken" check live HERE, not in the caller:
+# a check made before the script could be stale by the time the keys move. SCAN patterns are narrowed to exact
+# key kinds, so room `foo` never touches `foo-2`. Keys are not declared (they are found by SCAN), which is fine on
+# a single Redis node.
+_LUA_COMMON = """
+local function scan(pattern, keep)
+  local found, seen, cursor = {}, {}, "0"
+  repeat
+    local page = redis.call("SCAN", cursor, "MATCH", pattern, "COUNT", 1000)
+    cursor = page[1]
+    for _, key in ipairs(page[2]) do
+      if not seen[key] and keep(key) then seen[key] = true; found[#found + 1] = key end
+    end
+  until cursor == "0"
+  return found
+end
+local function agent_keys(room, kinds)
+  local prefixes = {}
+  for _, kind in ipairs(kinds) do prefixes[#prefixes + 1] = "bus:" .. kind .. ":" .. room .. ":" end
+  return scan("bus:*:" .. room .. ":*", function(key)
+    for _, prefix in ipairs(prefixes) do
+      if key:sub(1, #prefix) == prefix then return true end
+    end
+    return false
+  end)
+end
+local function now_ms()
+  local t = redis.call("TIME")
+  return t[1] * 1000 + math.floor(t[2] / 1000)
+end
+"""
+
+# ARGV: room, retain seconds, force (0/1), idle ms (empty = any age)
+_LUA_ARCHIVE = _LUA_COMMON + """
+local room, retain, force, idle = ARGV[1], tonumber(ARGV[2]), ARGV[3] == "1", tonumber(ARGV[4])
+local stream = "bus:stream:" .. room
+if redis.call("EXISTS", stream) == 0 then return {"absent"} end
+local present = #agent_keys(room, {"presence"})
+if present > 0 and not force then return {"present", present} end
+local now = now_ms()
+if idle then
+  local last = redis.call("XREVRANGE", stream, "+", "-", "COUNT", 1)
+  if #last > 0 and now - tonumber(last[1][1]:match("^(%d+)-")) < idle then return {"active"} end
+end
+local archive_id = room .. ":" .. string.format("%.0f", now)
+while redis.call("EXISTS", "bus:archived:" .. archive_id .. ":" .. stream) == 1 do
+  now = now + 1
+  archive_id = room .. ":" .. string.format("%.0f", now)
+end
+local prefix = "bus:archived:" .. archive_id .. ":"
+local keys = agent_keys(room, {"member", "groups"})
+keys[#keys + 1] = stream
+if redis.call("EXISTS", "bus:meta:" .. room) == 1 then keys[#keys + 1] = "bus:meta:" .. room end
+for _, key in ipairs(keys) do
+  redis.call("RENAME", key, prefix .. key)
+  redis.call("EXPIRE", prefix .. key, retain)
+end
+return {"ok", archive_id, #keys}
+"""
+
+# ARGV: archive id
+_LUA_UNARCHIVE = _LUA_COMMON + """
+local prefix = "bus:archived:" .. ARGV[1] .. ":"
+local keys = scan(prefix .. "*", function() return true end)
+if #keys == 0 then return {"absent"} end
+for _, key in ipairs(keys) do
+  local target = key:sub(#prefix + 1)
+  if redis.call("EXISTS", target) == 1 then return {"taken", target} end
+end
+for _, key in ipairs(keys) do
+  local target = key:sub(#prefix + 1)
+  redis.call("RENAME", key, target)
+  redis.call("PERSIST", target)
+end
+return {"ok", #keys}
+"""
+
+# ARGV: room, force (0/1)
+_LUA_CLEAR = _LUA_COMMON + """
+local room, force = ARGV[1], ARGV[2] == "1"
+local present = #agent_keys(room, {"presence"})
+if present > 0 and not force then return {"present", present} end
+local keys = agent_keys(room, {"member", "groups", "cursor", "presence"})
+keys[#keys + 1] = "bus:stream:" .. room
+keys[#keys + 1] = "bus:meta:" .. room
+local removed = 0
+for _, key in ipairs(keys) do removed = removed + redis.call("UNLINK", key) end
+if removed == 0 then return {"absent"} end
+return {"ok", removed}
+"""
+
+
+MAX_RETAIN_DAYS = 3650    # ten years; keeps EXPIRE inside Redis's range, so a script never half-moves a room
+MAX_IDLE_HOURS = 87600    # ten years
+
+
+def bounded_number(text, maximum):
+    """float(text) if it is a finite number in [0, maximum], else None."""
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if 0 <= value <= maximum else None
+
+
+def env_number(name, default, maximum):
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    value = bounded_number(raw, maximum)
+    if value is None:
+        sys.stderr.write(f"bus: {name}={raw!r} must be a number from 0 to {maximum}\n")
+        raise SystemExit(2)
+    return value
+
+
+def archive_retain_seconds():
+    days = env_number("BUS_ARCHIVE_RETAIN_DAYS", 7, MAX_RETAIN_DAYS)
+    if days <= 0:
+        sys.stderr.write("bus: BUS_ARCHIVE_RETAIN_DAYS must be greater than 0\n")
+        raise SystemExit(2)
+    return max(int(days * 86400), 1)
+
+
+def archive_idle_hours():
+    return env_number("BUS_ARCHIVE_IDLE_HOURS", 6, MAX_IDLE_HOURS)
+
+
+def archive_room(r, room, retain_seconds, force=False, idle_ms=None):
+    status, *rest = r.eval(_LUA_ARCHIVE, 0, room, retain_seconds, int(force), "" if idle_ms is None else int(idle_ms))
+    if status == "present":
+        return {"status": status, "present": rest[0]}
+    if status == "ok":
+        return {"status": status, "archive_id": rest[0], "keys": rest[1], "room": room}
+    return {"status": status}
+
+
+def unarchive_room(r, archive_id):
+    status, *rest = r.eval(_LUA_UNARCHIVE, 0, archive_id)
+    if status == "taken":
+        return {"status": status, "key": rest[0]}
+    if status == "ok":
+        return {"status": status, "room": archive_id.rsplit(":", 1)[0], "keys": rest[0]}
+    return {"status": status}
+
+
+def clear_room(r, room, force=False):
+    status, *rest = r.eval(_LUA_CLEAR, 0, room, int(force))
+    if status == "present":
+        return {"status": status, "present": rest[0]}
+    return {"status": status, "keys": rest[0] if rest else 0}
+
+
+def present_counts(r):
+    counts = {}
+    for key in r.scan_iter(match="bus:presence:*:*"):
+        room = key.split(":")[2]
+        counts[room] = counts.get(room, 0) + 1
+    return counts
+
+
+def ms_of(stream_id):
+    return int(stream_id.split("-")[0])
+
+
+def iso_from_ms(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds") if ms else ""
+
+
+def list_rooms(r):
+    """Every room that has a stream, newest activity first: title, XLEN, last activity (ms), live presence count."""
+    prefix = k_stream("")
+    names = sorted(n for n in (key[len(prefix):] for key in r.scan_iter(match=k_stream("*"))) if _ID_RE.match(n))
+    pipe = r.pipeline()
+    for name in names:
+        pipe.hget(k_meta(name), "title")
+        pipe.xlen(k_stream(name))
+        pipe.xrevrange(k_stream(name), count=1)
+    results = pipe.execute()
+    present = present_counts(r)
+    rows = []
+    for i, name in enumerate(names):
+        title, length, last = results[3 * i:3 * i + 3]
+        last_ms = ms_of(last[0][0]) if last else None
+        rows.append({"room": name, "title": title or "", "messages": length, "last_activity_ms": last_ms,
+                     "last_activity": iso_from_ms(last_ms), "present": present.get(name, 0)})
+    return sorted(rows, key=lambda row: row["last_activity_ms"] or 0, reverse=True)
+
+
+def list_archived(r):
+    """Archived rooms, newest archive first, with the retention left on their stream."""
+    rows = []
+    for key in r.scan_iter(match=f"{ARCHIVE_PREFIX}*:bus:stream:*"):
+        room, stamp, _ = key[len(ARCHIVE_PREFIX):].split(":", 2)
+        archive_id = f"{room}:{stamp}"
+        rows.append({"archive_id": archive_id, "room": room, "archived_ms": int(stamp), "archived": iso_from_ms(int(stamp)),
+                     "title": r.hget(f"{ARCHIVE_PREFIX}{archive_id}:{k_meta(room)}", "title") or "",
+                     "messages": r.xlen(key), "expires_in": max(r.ttl(key), 0)})
+    return sorted(rows, key=lambda row: row["archived_ms"], reverse=True)
+
+
+def sweep_idle(r, idle_hours, retain_seconds):
+    """Archive every idle room nobody is present in; returns the archive results. 0 hours disables it. The cheap
+    filter here only saves script calls: the script re-checks presence and idleness atomically."""
+    if not idle_hours:
+        return []
+    idle_ms = idle_hours * 3_600_000
+    cutoff = time.time() * 1000 - idle_ms
+    archived = []
+    for row in list_rooms(r):
+        if row["present"] or (row["last_activity_ms"] or 0) > cutoff:
+            continue
+        result = archive_room(r, row["room"], retain_seconds, idle_ms=idle_ms)
+        if result["status"] == "ok":
+            archived.append(result)
+    return archived
+
+
+def report_swept(swept):
+    for result in swept:
+        sys.stderr.write(f"bus: auto-archived idle room {terminal_line(result['room'])} as {result['archive_id']}\n")
+
+
+def cmd_rooms(r, args):
+    if args.archived:
+        rows = list_archived(r)
+        columns = ("archive_id", "title", "messages", "archived", "expires_in")
+    else:
+        report_swept(sweep_idle(r, archive_idle_hours(), archive_retain_seconds()))
+        rows = list_rooms(r)
+        columns = ("room", "title", "messages", "last_activity", "present")
+    if args.json:
+        print(json.dumps(rows))
+        return 0
+    for row in rows:
+        print("\t".join(terminal_line(str(row[c]) or "-") for c in columns))
+    return 0
+
+
+def require_room(args, verb):
+    if args.room_given:
+        return True
+    sys.stderr.write(f"bus {verb}: --room is required (it never falls back to the default room)\n")
+    return False
+
+
+def refuse_present(verb, room, count):
+    sys.stderr.write(f"bus {verb}: REFUSING - {count} member(s) present in room {terminal_line(room)}. "
+                     "Re-run with --force to override.\n")
+    return 1
+
+
+def cmd_archive(r, args):
+    if args.idle_hours is not None:
+        if args.room_given or args.force:
+            sys.stderr.write("bus archive: --idle-hours sweeps every idle room; it takes no --room or --force "
+                             "(a room with a present member is never auto-archived)\n")
+            return 2
+        swept = sweep_idle(r, args.idle_hours, archive_retain_seconds())
+        report_swept(swept)
+        print(json.dumps(swept) if args.json else f"archived {len(swept)} idle room(s)")
+        return 0
+    if not require_room(args, "archive"):
+        return 2
+    retain = archive_retain_seconds()
+    result = archive_room(r, args.room, retain, force=args.force)
+    if result["status"] == "present":
+        return refuse_present("archive", args.room, result["present"])
+    if result["status"] != "ok":
+        sys.stderr.write(f"bus archive: no room {terminal_line(args.room)}\n")
+        return 1
+    print(json.dumps(result) if args.json else f"archived room={args.room} as {result['archive_id']} "
+          f"({result['keys']} keys, kept {retain // 86400}d; undo with: bus unarchive {result['archive_id']})")
+    return 0
+
+
+def cmd_unarchive(r, args):
+    result = unarchive_room(r, args.archive_id)
+    if result["status"] == "absent":
+        sys.stderr.write(f"bus unarchive: no archive {terminal_line(args.archive_id)} (expired or never existed)\n")
+        return 1
+    if result["status"] == "taken":
+        sys.stderr.write(f"bus unarchive: REFUSING - the live key {terminal_line(result['key'])} already exists; "
+                         "clear or archive the live room first.\n")
+        return 1
+    print(json.dumps(result) if args.json else f"restored room={result['room']} ({result['keys']} keys)")
+    return 0
+
+
+def cmd_clear(r, args):
+    if not require_room(args, "clear"):
+        return 2
+    result = clear_room(r, args.room, force=args.force)
+    if result["status"] == "present":
+        return refuse_present("clear", args.room, result["present"])
+    if result["status"] != "ok":
+        sys.stderr.write(f"bus clear: no room {terminal_line(args.room)}\n")
+        return 1
+    print(json.dumps(result) if args.json else f"cleared room={args.room} ({result['keys']} keys deleted)")
     return 0
 
 
@@ -1967,6 +2282,19 @@ def positive_int(value):
     return int(value)
 
 
+def archive_id(value):
+    if not ARCHIVE_ID_RE.match(value):
+        raise argparse.ArgumentTypeError(f"'{value}' must look like <room>:<epoch-ms>, as `bus rooms --archived` prints it")
+    return value
+
+
+def idle_hours(value):
+    number = bounded_number(value, MAX_IDLE_HOURS)
+    if number is None:
+        raise argparse.ArgumentTypeError(f"'{value}' must be a number from 0 to {MAX_IDLE_HOURS}")
+    return number
+
+
 def _as(parser):
     parser.add_argument("--as", dest="as_agent", type=ident, required=True,
                         help="your agent id")
@@ -1984,7 +2312,8 @@ def _issue(parser):
 def build_parser():
     p = argparse.ArgumentParser(prog="bus", description="Tiny durable multi-agent message bus (Redis Streams).")
     p.add_argument("--url", default=DEFAULT_URL, help=f"Redis URL (default {DEFAULT_URL})")
-    p.add_argument("--room", default=DEFAULT_ROOM, type=ident, help=f"room/topic stream (default {DEFAULT_ROOM})")
+    # default None: main() fills in DEFAULT_ROOM, but `archive` and `clear` need to know the room was named.
+    p.add_argument("--room", default=None, type=ident, help=f"room/topic stream (default {DEFAULT_ROOM})")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--version", action="version", version="bus 0.1.0")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2027,7 +2356,24 @@ def build_parser():
     pr.add_argument("--keep", type=positive_int, default=5000, help="messages to keep (default 5000)")
     pr.add_argument("--force", action="store_true", help="trim even if it drops unread for lagging agents")
 
-    rp = sub.add_parser("reap", help="list stale issue locks (holder absent); --release <issue> to free ONE")
+    ro = sub.add_parser("rooms", help="list rooms (and sweep idle ones); --archived lists archives")
+    ro.add_argument("--archived", action="store_true", help="list archived rooms instead")
+
+    ar = sub.add_parser("archive", help="hide a room now (--room R) or sweep idle rooms (--idle-hours N); kept for a retention window")
+    # SUPPRESS keeps the global --room when this one is absent, so `bus --room R archive` and `bus archive --room R` both work
+    ar.add_argument("--room", type=ident, default=argparse.SUPPRESS, help="the room to archive (required, no default)")
+    ar.add_argument("--idle-hours", type=idle_hours, default=None,
+                    help="archive every room idle longer than N hours with nobody present (0 disables)")
+    ar.add_argument("--force", action="store_true", help="archive even though members are present")
+    un = sub.add_parser("unarchive", help="bring an archived room back (refuses if the live name is taken)")
+    un.add_argument("archive_id", type=archive_id, help="<room>:<epoch-ms> from `bus rooms --archived`")
+    cl = sub.add_parser("clear", help="delete a room and every key of it NOW (destructive, guarded)")
+    cl.add_argument("--room", type=ident, default=argparse.SUPPRESS, help="the room to delete (required, no default)")
+    cl.add_argument("--force", action="store_true", help="clear even though members are present")
+    for room_cmd in (ro, ar, un, cl):
+        room_cmd.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="machine-readable output")
+
+    rp = sub.add_parser("reap",help="list stale issue locks (holder absent); --release <issue> to free ONE")
     rp.add_argument("--release", type=positive_int, default=None, metavar="ISSUE",
                     help="release exactly one stale lock you've verified is dead (default: list only)")
 
@@ -2145,11 +2491,14 @@ DISPATCH = {
     "huddle": cmd_huddle, "pen": cmd_pen,
     "signoff": cmd_signoff, "unblock": cmd_unblock,
     "state": cmd_state, "usage": cmd_usage, "title": cmd_title, "roster": cmd_roster,
+    "rooms": cmd_rooms, "archive": cmd_archive, "unarchive": cmd_unarchive, "clear": cmd_clear,
 }
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    args.room_given = args.room is not None
+    args.room = args.room or DEFAULT_ROOM
     if args.cmd == "doctor":
         return cmd_doctor(args.url)
     if args.cmd == "init":

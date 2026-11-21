@@ -283,6 +283,11 @@ bus watch    [-n 10] [--topic T]             # live-follow (read-only observer)
 bus thread   ID                              # print the full reply_to thread of a message
 bus inbox    --as A                          # peek unread directed msgs / questions (no cursor move)
 bus prune    [--keep 5000] [--force]         # trim the room to newest N (refuses if it drops unread)
+bus rooms    [--archived] [--json]           # rooms: title, messages, last activity, present (sweeps idle rooms first)
+bus archive  --room R [--force]              # hide R now; kept BUS_ARCHIVE_RETAIN_DAYS (refuses while members are present)
+bus archive  --idle-hours N                  # sweep: archive every room idle > N hours with nobody present (0 = off)
+bus unarchive ARCHIVE_ID                     # bring it back (refuses if the live name is taken); id from `rooms --archived`
+bus clear    --room R [--force]              # delete R and every key of it NOW (refuses while members are present)
 bus join     --as A                          # register presence; cursor to "now"
              [--replay] [--group G]... [--role R] [--harness H] [--model M] [--workspace D]
                                              # --replay: cursor to the start, backlog delivered
@@ -399,9 +404,11 @@ authentication** — the "homegrown simple" tradeoff. Sharp edges:
   untrusted agent on the bus.
 - **`--to all __SHUTDOWN__` is a fleet kill-switch.** One message stops every
   agent. Intended for the operator; available to any agent on the bus.
-- **Maintenance commands are not an auth boundary.** `bus prune` and
-  `bus reap --release` are explicit manual commands (never automatic), but any
-  local caller can invoke them.
+- **Maintenance commands are not an auth boundary.** `bus prune`,
+  `bus clear`, `bus archive` and `bus reap --release` are explicit commands
+  (the one automatic path is the idle-room sweep, which only archives and
+  never touches a room with a member present), but any local caller can
+  invoke them.
 - **Message content is untrusted input to your agents.** A peer's body is fed
   into each agent's context. The Stop hook fences it in an "UNTRUSTED" boundary
   and `prompts/agent-system.md` tells agents not to obey embedded instructions,
@@ -423,6 +430,8 @@ numbers are charset/type validated.
 |-----|---------|---------|
 | `BUS_REDIS_URL` | `redis://127.0.0.1:6379/0` | Redis connection (also read by `start-redis.sh`) |
 | `BUS_ROOM` | `main` | default room/stream |
+| `BUS_ARCHIVE_RETAIN_DAYS` | `7` | how long `bus archive` keeps a room before Redis expires it |
+| `BUS_ARCHIVE_IDLE_HOURS` | `6` | idle time before the sweep (`bus rooms`) archives a room; `0` disables it |
 | `BUS_GH_REPO` | — | `owner/repo` the issue/label/huddle commands target |
 | `BUS_REPO_DIR` | cwd's repo | the git repo worktrees/huddles operate on |
 | `BUS_WORKTREE_ROOT` | `../<repo>-worktrees` | where per-agent worktrees live |
@@ -433,7 +442,9 @@ numbers are charset/type validated.
 | `BUS_DONE_MARKER` | set by the loop | file an agent touches to signal its turn is complete |
 
 Redis keys (for the curious): `bus:stream:<room>`, `bus:cursor:<room>:<agent>`,
-`bus:presence:<room>:<agent>` (90s TTL), `bus:lock:issue:<N>`,
+`bus:presence:<room>:<agent>` (90s TTL), `bus:meta:<room>`, `bus:member:<room>:<agent>`,
+`bus:groups:<room>:<agent>`, `bus:archived:<room>:<epoch-ms>:<original key>` (an archived room, with a TTL),
+`bus:lock:issue:<N>`,
 `bus:worktree:issue:<N>`, `bus:huddle:issue:<N>`, `bus:pen:issue:<N>`,
 `bus:signoff:issue:<N>`, `bus:block:issue:<N>`.
 
