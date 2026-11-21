@@ -244,13 +244,10 @@ class PickerWritesE2E(unittest.IsolatedAsyncioTestCase):
         self.rooms = {name: f"{self.tag}-{name}" for name in ("idle", "busy", "fresh")}
 
     def claim_sweep_db(self):
-        """The sweep archives every idle room in its db, so run it only on a db holding nothing but this suite's
-        own leftovers (rooms named swt-*), which it deletes first."""
-        foreign = [key for key in self.sweep_r.scan_iter() if ":swt-" not in key]
-        if foreign:
-            self.skipTest(f"db 14 holds {len(foreign)} key(s) this suite did not write; the sweep would archive them")
-        for key in self.sweep_r.scan_iter(match="bus:*:swt-*"):
-            self.sweep_r.delete(key)
+        """The sweep archives every idle room in its db, so run it only on an empty db. It never deletes keys
+        it did not write; tearDown removes this test's own."""
+        if self.sweep_r.dbsize():
+            self.skipTest("db 14 is not empty; the sweep would archive rooms this test did not write")
 
     def tearDown(self):
         for client in (self.r, self.sweep_r):
