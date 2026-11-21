@@ -115,11 +115,20 @@ Every worker retires. The board collapses retired members to one line and marks 
 ## The board
 
 `scripts/swarm-board --room R` follows the room live: roster cards (state, harness and model, what each member is
-doing, tokens and cost), the post list, and the selected post in full. Keys are listed in its footer.
+doing, tokens and cost), the post list, and the selected post in full. Keys are listed in its footer. The board is
+read-only, and `b` goes back to the picker.
 
-## Rooms pile up: archive and clear
+## Rooms pile up: the picker, archive and clear
 
-These commands list, hide and delete rooms:
+Run `scripts/swarm-board` with no `--room` to open a picker of the live rooms, newest activity first. Each row shows
+the title, message count, last activity and how many members are present.
+
+```
+enter  open the board   a  archive   x  clear (asks for y)   r  refresh   q  quit
+```
+
+Archive, clear and the sweep below are the only writes the board tools make. The picker has no force: when a member
+is present it refuses and prints the `bus ... --force` command to run instead. Each operation is also a command:
 
 | Command | What it does |
 |---|---|
@@ -140,14 +149,14 @@ Details that matter:
 - Archive leaves cursors in place. Stream ids are time-based, so an old cursor still reads a new stream of the same
   name correctly. One gap remains: a send in the same millisecond as the old stream's last id can get an id at or
   below that cursor.
-- The sweep runs whenever `bus rooms` runs. Its notices go to stderr, so `--json` output stays
+- The sweep runs when the picker opens and when `bus rooms` runs. Its notices go to stderr, so `--json` output stays
   clean. Set `BUS_ARCHIVE_IDLE_HOURS=0` to turn it off (the default is 6). `bus archive --idle-hours 0` does nothing
   for the same reason. A room with a member present is never swept, however idle it is.
 - A room is any `bus:stream:<room>` key. A room that has a title or members but no messages is not listed or
   archived. `bus clear` still deletes its keys.
 - `bus clear` leaves the room's archives alone. They expire on their own.
 
-To sweep on a schedule, add a cron entry:
+To sweep without opening the picker, add a cron entry:
 
 ```
 0 * * * * BUS_REDIS_URL=redis://127.0.0.1:6379/0 /path/to/messagebus/bus archive --idle-hours 6

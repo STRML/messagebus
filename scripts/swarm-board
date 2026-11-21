@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""swarm-board: read-only terminal board for one bus room (roster, posts, message).
+"""swarm-board: terminal board for bus rooms.
 
-Run:  scripts/swarm-board [--url redis://127.0.0.1:6379/0] [--room main]
+With no --room it opens a picker of live rooms (newest activity first). `a` archives the selected room, `x` clears it
+after a `y`, and the picker sweeps rooms idle past BUS_ARCHIVE_IDLE_HOURS when it opens: those are its only writes.
+A board (one room's roster, posts and message) is read-only; `b` goes back to the picker.
+
+Run:  scripts/swarm-board [--url redis://127.0.0.1:6379/0] [--room R]
 """
 
 import argparse
@@ -10,6 +14,7 @@ import importlib.util
 import io
 import os
 import re
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -26,7 +31,7 @@ from textual.app import App
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.css.query import NoMatches
-from textual.widgets import Rule, Static
+from textual.widgets import DataTable, Rule, Static
 
 
 def load_bus():
@@ -52,8 +57,10 @@ MIN_RECIPIENT_WIDTH = 4
 ROSTER_ROWS = 2
 EXPANDED_CAP = 20
 PAGE_FALLBACK = 10
-HINTS = ("tab switch pane · enter hide message · space expand · p filter · "
-         "o open · f follow · z zoom · esc back")
+HINTS = ("tab pane · enter hide msg · space expand · p filter · "
+         "o open · f follow · z zoom · b rooms · esc back")
+PICKER_HINTS = "enter open board · a archive · x clear · r refresh · q quit"
+PICKER = "picker"
 KIND_TAGS = {"done": ("✓ done", f"bold {GREEN}"), "system": ("⚙", DIM), "question": ("?", "bold #e3b341")}
 PANES = ("roster", "posts", "message")
 CONSOLE = Console(file=io.StringIO(), width=200)
@@ -804,6 +811,7 @@ class SwarmBoard(App):
         Binding("f", "toggle_follow", "follow"),
         Binding("z", "zoom", "zoom"),
         Binding("escape", "back", "back"),
+        Binding("b", "picker", "rooms"),
         Binding("q", "quit", "quit"),
     ]
 
@@ -951,6 +959,9 @@ class SwarmBoard(App):
         self.state.escape()
         self.refresh_board()
 
+    def action_picker(self):
+        self.exit(PICKER)
+
     def action_open_workspace(self):
         info = self.state.info(self.state.member_name() or "")
         path = workspace_path(info.get("workspace"))
@@ -971,12 +982,239 @@ def open_path(path):
     subprocess.Popen([opener, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+DONE = {"archive": "archived", "clear": "cleared"}
+TITLE_WIDTH = 40
+PICKER_KEYS = {"a", "x", "y", "r", "q", "escape", "up", "down", "enter"}
+
+
+def bus_command(url, *words):
+    prefix = "bus" if url == bus.DEFAULT_URL else f"bus --url {shlex.quote(url)}"
+    return " ".join([prefix, *words])
+
+
+def room_cells(row, now):
+    last = row["last_activity_ms"]
+    present = Text(str(row["present"]), style=GREEN if row["present"] else DIM, justify="right")
+    title = ellipsize(bus.terminal_line(row["title"]), TITLE_WIDTH)
+    return (Text(clean(row["room"]), style="bold"), Text(title),
+            Text(str(row["messages"]), justify="right"), Text(ago(last, now) if last else "-"), present)
+
+
+def picker_header(rows, notes):
+    text = Text()
+    text.append("Swarm rooms ", style="bold").append(f"· {plural(len(rows), 'room')}", style=DIM)
+    if notes:
+        text.append(" · " + notes, style=GOLD)
+    return text
+
+
+class RoomPicker(App):
+    """Live rooms, newest activity first. Archive, clear and the open-time sweep are the only writes."""
+
+    CSS = """
+    Screen { background: #0b0e14; color: #c9d1d9; }
+    DataTable { height: 1fr; background: #0b0e14; }
+    #foot { dock: bottom; height: 3; }
+    """
+    BINDINGS = [
+        Binding("a", "archive", "archive"),
+        Binding("x", "clear", "clear"),
+        Binding("y", "confirm", "confirm", show=False),
+        Binding("r", "refresh_rooms", "refresh"),
+        Binding("escape", "cancel", "cancel", show=False),
+        Binding("q", "quit", "quit"),
+    ]
+
+    def __init__(self, r, idle_hours=0, retain_seconds=7 * 86400, interval=2.0, url=bus.DEFAULT_URL):
+        super().__init__()
+        self.r = r
+        self.idle_hours = idle_hours
+        self.retain_seconds = retain_seconds
+        self.interval = interval
+        self.url = url
+        self.rooms = []
+        self.pending = None
+        self.notes = ""
+        self.message = ""
+        self.error = ""
+        self.sweep_due = bool(idle_hours)
+        self.polling = False
+
+    def compose(self):
+        yield Static(id="header")
+        yield DataTable(id="rooms", cursor_type="row", zebra_stripes=False)
+        with Vertical(id="foot"):
+            yield Rule()
+            yield Static(id="status")
+            yield Static(Text(PICKER_HINTS, style=DIM), id="hints")
+
+    def on_mount(self):
+        table = self.query_one(DataTable)
+        table.add_columns("Room", "Title", "Messages", "Last activity", "Present")
+        table.focus()
+        if self.interval:
+            self.set_interval(self.interval, self.poll)
+        self.poll()
+
+    def poll(self):
+        if self.polling:
+            return
+        self.polling = True
+        self.run_worker(self.poll_worker, thread=True, group="poll")
+
+    def poll_worker(self):
+        swept = []
+        try:
+            self.sweep(swept)
+            rows = bus.list_rooms(self.r)
+        except redis.RedisError as exc:
+            self.call_from_thread(self.apply_error, f"redis: {exc}", swept)
+        else:
+            self.call_from_thread(self.apply, rows, swept)
+
+    def sweep(self, swept):
+        """The open-time sweep. It stays due until it finishes, and rooms archived before an error still get reported."""
+        if self.sweep_due:
+            bus.sweep_idle(self.r, self.idle_hours, self.retain_seconds, archived=swept)
+            self.sweep_due = False
+
+    def note_swept(self, swept):
+        if swept:
+            names = ", ".join(clean(s["room"]) for s in swept)
+            self.notes = f"auto-archived {plural(len(swept), 'idle room')}: {names}"
+
+    def apply(self, rows, swept=()):
+        self.polling = False
+        self.error = ""
+        self.note_swept(swept)
+        keep = self.selected_name()
+        self.rooms = rows
+        self.render_rooms(keep)
+
+    def apply_error(self, message, swept=()):
+        self.polling = False
+        self.error = message
+        self.note_swept(swept)
+        self.render_header()
+        self.render_status()
+
+    def render_rooms(self, keep):
+        table, now = self.query_one(DataTable), time.time()
+        table.clear()
+        for row in self.rooms:
+            table.add_row(*room_cells(row, now), key=row["room"])
+        names = [row["room"] for row in self.rooms]
+        if keep in names:
+            table.move_cursor(row=names.index(keep))
+        self.render_header()
+        self.render_status()
+
+    def render_header(self):
+        self.query_one("#header", Static).update(picker_header(self.rooms, self.notes))
+
+    def render_status(self):
+        if self.pending:
+            row = next((r for r in self.rooms if r["room"] == self.pending), None)
+            count = row["messages"] if row else 0
+            line = Text(f'Clear "{clean(self.pending)}" and its {plural(count, "message")} for good? '
+                        "press y to confirm, any other key cancels", style=f"bold {GOLD}")
+        elif self.error:
+            line = Text(self.error, style="bold #ff7b72")
+        else:
+            line = Text(self.message, style="#c9d1d9")
+        self.query_one("#status", Static).update(line)
+
+    def selected_name(self):
+        table = self.query_one(DataTable)
+        if not self.rooms or not 0 <= table.cursor_row < len(self.rooms):
+            return None
+        return self.rooms[table.cursor_row]["room"]
+
+    def say(self, message):
+        self.pending, self.message, self.notes = None, message, ""
+        self.render_header()
+        self.render_status()
+
+    def on_data_table_row_selected(self, event):
+        self.exit(event.row_key.value)
+
+    def on_key(self, event):
+        if self.pending and event.key not in PICKER_KEYS:
+            self.say("cancelled")
+
+    def action_refresh_rooms(self):
+        if self.drop_prompt():
+            return
+        self.say("")
+        self.poll()
+
+    def action_cancel(self):
+        self.say("cancelled" if self.pending else "")
+
+    def drop_prompt(self):
+        """While the clear prompt is up, any key but y only cancels it; it never also runs that key's action."""
+        was_pending = self.pending is not None
+        if was_pending:
+            self.say("cancelled")
+        return was_pending
+
+    def action_archive(self):
+        name = self.selected_name()
+        if self.drop_prompt() or name is None:
+            return
+        self.attempt(name, "archive", lambda: bus.archive_room(self.r, name, self.retain_seconds))
+
+    def action_clear(self):
+        name = self.selected_name()
+        if self.drop_prompt() or name is None:
+            return
+        self.pending = name
+        self.render_status()
+
+    def action_confirm(self):
+        name, self.pending = self.pending, None
+        if name is not None:
+            self.attempt(name, "clear", lambda: bus.clear_room(self.r, name))
+
+    def attempt(self, name, verb, call):
+        try:
+            result = call()
+        except redis.RedisError as exc:
+            self.say(f"redis: {exc}")
+            return
+        self.finish(name, result, verb)
+
+    def finish(self, name, result, verb):
+        shown = clean(name)
+        if result["status"] == "ok":
+            undo = bus_command(self.url, "unarchive", result["archive_id"]) if verb == "archive" else ""
+            self.say(f"{DONE[verb]} {shown}" + (f" as {result['archive_id']}; `{undo}` brings it back" if undo else ""))
+        elif result["status"] == "present":
+            force = bus_command(self.url, verb, "--room", name, "--force")
+            self.say(f"{shown} has {result['present']} member(s) present; `{force}` does it anyway")
+        else:
+            self.say(f"{shown} is already gone")
+        self.poll()
+
+
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(prog="swarm-board", description="Read-only swarm board for a bus room.")
+    parser = argparse.ArgumentParser(prog="swarm-board", description="Terminal board for bus rooms.")
     parser.add_argument("--url", default=bus.DEFAULT_URL, help=f"Redis URL (default {bus.DEFAULT_URL})")
-    parser.add_argument("--room", default=bus.DEFAULT_ROOM, type=bus.ident,
-                        help=f"room to watch (default {bus.DEFAULT_ROOM})")
+    parser.add_argument("--room", default=None, type=bus.ident, help="room to watch (omit to pick one from a list)")
     return parser.parse_args(argv)
+
+
+def browse(r, room, url=bus.DEFAULT_URL):
+    """Picker and boards take turns: the picker exits with a room name, a board exits with PICKER on `b`.
+    The BUS_ARCHIVE_* settings are read only when a picker opens, so a board never trips over them."""
+    while True:
+        if room is None:
+            room = RoomPicker(r, bus.archive_idle_hours(), bus.archive_retain_seconds(), url=url).run()
+            if room is None:
+                return
+        if SwarmBoard(r, room).run() != PICKER:
+            return
+        room = None
 
 
 def main(argv=None):
@@ -986,7 +1224,7 @@ def main(argv=None):
     except redis.RedisError as exc:
         sys.stderr.write(f"swarm-board: cannot reach Redis at {args.url}: {exc}\n")
         return 1
-    SwarmBoard(r, args.room).run()
+    browse(r, args.room, args.url)
     return 0
 
 
