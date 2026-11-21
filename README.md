@@ -263,6 +263,7 @@ and retire when the coordinator posts `--kind done`.
 ```bash
 scripts/swarm-spawn --room swarm-x --as w1 --role worker --workspace <worktree> --brief brief.md
 scripts/swarm-board --room swarm-x          # live board TUI (needs textual: pip install -r requirements-dev.txt)
+scripts/swarm-board                         # no --room: pick from the live rooms (a archive, x clear, b back from a board)
 ```
 
 Seats are picked from `~/.config/messagebus/swarm.yaml` (see `examples/swarm.yaml`) by intelligence band and spare
@@ -431,7 +432,7 @@ numbers are charset/type validated.
 | `BUS_REDIS_URL` | `redis://127.0.0.1:6379/0` | Redis connection (also read by `start-redis.sh`) |
 | `BUS_ROOM` | `main` | default room/stream |
 | `BUS_ARCHIVE_RETAIN_DAYS` | `7` | how long `bus archive` keeps a room before Redis expires it |
-| `BUS_ARCHIVE_IDLE_HOURS` | `6` | idle time before the sweep (`bus rooms`) archives a room; `0` disables it |
+| `BUS_ARCHIVE_IDLE_HOURS` | `6` | idle time before the sweep (`bus rooms`, the swarm-board picker) archives a room; `0` disables it |
 | `BUS_GH_REPO` | — | `owner/repo` the issue/label/huddle commands target |
 | `BUS_REPO_DIR` | cwd's repo | the git repo worktrees/huddles operate on |
 | `BUS_WORKTREE_ROOT` | `../<repo>-worktrees` | where per-agent worktrees live |
