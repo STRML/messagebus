@@ -880,14 +880,15 @@ def list_archived(r):
     return sorted(rows, key=lambda row: row["archived_ms"], reverse=True)
 
 
-def sweep_idle(r, idle_hours, retain_seconds):
+def sweep_idle(r, idle_hours, retain_seconds, archived=None):
     """Archive every idle room nobody is present in; returns the archive results. 0 hours disables it. The cheap
-    filter here only saves script calls: the script re-checks presence and idleness atomically."""
+    filter here only saves script calls: the script re-checks presence and idleness atomically. Pass a list as
+    `archived` to keep the results of rooms archived before a Redis error ends the sweep."""
+    archived = [] if archived is None else archived
     if not idle_hours:
-        return []
+        return archived
     idle_ms = idle_hours * 3_600_000
     cutoff = time.time() * 1000 - idle_ms
-    archived = []
     for row in list_rooms(r):
         if row["present"] or (row["last_activity_ms"] or 0) > cutoff:
             continue

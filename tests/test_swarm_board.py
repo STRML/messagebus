@@ -471,7 +471,7 @@ class SwarmBoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("claude-sonnet-5-5", detail)
             self.assertIn("sess-1", detail)
             self.assertIn("/tmp/does-not-exist", detail)
-            self.assertIn("#4, 7m ago", detail)
+            self.assertRegex(detail, r"#4, \d+m ago")  # BASE_MS is fixed at import, so a slow suite ages it
 
     async def test_enter_hides_message_and_z_zooms(self):
         app = self.make_app()

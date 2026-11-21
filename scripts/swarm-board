@@ -14,6 +14,7 @@ import importlib.util
 import io
 import os
 import re
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -56,8 +57,8 @@ MIN_RECIPIENT_WIDTH = 4
 ROSTER_ROWS = 2
 EXPANDED_CAP = 20
 PAGE_FALLBACK = 10
-HINTS = ("tab switch pane · enter hide message · space expand · p filter · "
-         "o open · f follow · z zoom · esc back · b rooms")
+HINTS = ("tab pane · enter hide msg · space expand · p filter · "
+         "o open · f follow · z zoom · b rooms · esc back")
 PICKER_HINTS = "enter open board · a archive · x clear · r refresh · q quit"
 PICKER = "picker"
 KIND_TAGS = {"done": ("✓ done", f"bold {GREEN}"), "system": ("⚙", DIM), "question": ("?", "bold #e3b341")}
@@ -982,12 +983,20 @@ def open_path(path):
 
 
 DONE = {"archive": "archived", "clear": "cleared"}
+TITLE_WIDTH = 40
+PICKER_KEYS = {"a", "x", "y", "r", "q", "escape", "up", "down", "enter"}
+
+
+def bus_command(url, *words):
+    prefix = "bus" if url == bus.DEFAULT_URL else f"bus --url {shlex.quote(url)}"
+    return " ".join([prefix, *words])
 
 
 def room_cells(row, now):
     last = row["last_activity_ms"]
     present = Text(str(row["present"]), style=GREEN if row["present"] else DIM, justify="right")
-    return (Text(clean(row["room"]), style="bold"), Text(clean(row["title"])),
+    title = ellipsize(bus.terminal_line(row["title"]), TITLE_WIDTH)
+    return (Text(clean(row["room"]), style="bold"), Text(title),
             Text(str(row["messages"]), justify="right"), Text(ago(last, now) if last else "-"), present)
 
 
@@ -1016,16 +1025,18 @@ class RoomPicker(App):
         Binding("q", "quit", "quit"),
     ]
 
-    def __init__(self, r, idle_hours=0, retain_seconds=7 * 86400, interval=2.0):
+    def __init__(self, r, idle_hours=0, retain_seconds=7 * 86400, interval=2.0, url=bus.DEFAULT_URL):
         super().__init__()
         self.r = r
         self.idle_hours = idle_hours
         self.retain_seconds = retain_seconds
         self.interval = interval
+        self.url = url
         self.rooms = []
         self.pending = None
         self.notes = ""
         self.message = ""
+        self.error = ""
         self.sweep_due = bool(idle_hours)
         self.polling = False
 
@@ -1052,32 +1063,39 @@ class RoomPicker(App):
         self.run_worker(self.poll_worker, thread=True, group="poll")
 
     def poll_worker(self):
+        swept = []
         try:
-            swept = self.sweep()
+            self.sweep(swept)
             rows = bus.list_rooms(self.r)
         except redis.RedisError as exc:
-            self.call_from_thread(self.apply_error, f"redis: {exc}")
+            self.call_from_thread(self.apply_error, f"redis: {exc}", swept)
         else:
             self.call_from_thread(self.apply, rows, swept)
 
-    def sweep(self):
-        if not self.sweep_due:
-            return []
-        self.sweep_due = False
-        return bus.sweep_idle(self.r, self.idle_hours, self.retain_seconds)
+    def sweep(self, swept):
+        """The open-time sweep. It stays due until it finishes, and rooms archived before an error still get reported."""
+        if self.sweep_due:
+            bus.sweep_idle(self.r, self.idle_hours, self.retain_seconds, archived=swept)
+            self.sweep_due = False
 
-    def apply(self, rows, swept=()):
-        self.polling = False
+    def note_swept(self, swept):
         if swept:
             names = ", ".join(clean(s["room"]) for s in swept)
             self.notes = f"auto-archived {plural(len(swept), 'idle room')}: {names}"
+
+    def apply(self, rows, swept=()):
+        self.polling = False
+        self.error = ""
+        self.note_swept(swept)
         keep = self.selected_name()
         self.rooms = rows
         self.render_rooms(keep)
 
-    def apply_error(self, message):
+    def apply_error(self, message, swept=()):
         self.polling = False
-        self.message = message
+        self.error = message
+        self.note_swept(swept)
+        self.render_header()
         self.render_status()
 
     def render_rooms(self, keep):
@@ -1088,8 +1106,11 @@ class RoomPicker(App):
         names = [row["room"] for row in self.rooms]
         if keep in names:
             table.move_cursor(row=names.index(keep))
-        self.query_one("#header", Static).update(picker_header(self.rooms, self.notes))
+        self.render_header()
         self.render_status()
+
+    def render_header(self):
+        self.query_one("#header", Static).update(picker_header(self.rooms, self.notes))
 
     def render_status(self):
         if self.pending:
@@ -1097,6 +1118,8 @@ class RoomPicker(App):
             count = row["messages"] if row else 0
             line = Text(f'Clear "{clean(self.pending)}" and its {plural(count, "message")} for good? '
                         "press y to confirm, any other key cancels", style=f"bold {GOLD}")
+        elif self.error:
+            line = Text(self.error, style="bold #ff7b72")
         else:
             line = Text(self.message, style="#c9d1d9")
         self.query_one("#status", Static).update(line)
@@ -1108,46 +1131,67 @@ class RoomPicker(App):
         return self.rooms[table.cursor_row]["room"]
 
     def say(self, message):
-        self.pending, self.message = None, message
+        self.pending, self.message, self.notes = None, message, ""
+        self.render_header()
         self.render_status()
 
     def on_data_table_row_selected(self, event):
         self.exit(event.row_key.value)
 
     def on_key(self, event):
-        if self.pending and event.key not in ("y", "x"):
+        if self.pending and event.key not in PICKER_KEYS:
             self.say("cancelled")
 
     def action_refresh_rooms(self):
+        if self.drop_prompt():
+            return
         self.say("")
         self.poll()
 
     def action_cancel(self):
         self.say("cancelled" if self.pending else "")
 
+    def drop_prompt(self):
+        """While the clear prompt is up, any key but y only cancels it; it never also runs that key's action."""
+        was_pending = self.pending is not None
+        if was_pending:
+            self.say("cancelled")
+        return was_pending
+
     def action_archive(self):
         name = self.selected_name()
-        if name is not None:
-            self.finish(name, bus.archive_room(self.r, name, self.retain_seconds), "archive")
+        if self.drop_prompt() or name is None:
+            return
+        self.attempt(name, "archive", lambda: bus.archive_room(self.r, name, self.retain_seconds))
 
     def action_clear(self):
         name = self.selected_name()
-        if name is not None:
-            self.pending = name
-            self.render_status()
+        if self.drop_prompt() or name is None:
+            return
+        self.pending = name
+        self.render_status()
 
     def action_confirm(self):
         name, self.pending = self.pending, None
         if name is not None:
-            self.finish(name, bus.clear_room(self.r, name), "clear")
+            self.attempt(name, "clear", lambda: bus.clear_room(self.r, name))
+
+    def attempt(self, name, verb, call):
+        try:
+            result = call()
+        except redis.RedisError as exc:
+            self.say(f"redis: {exc}")
+            return
+        self.finish(name, result, verb)
 
     def finish(self, name, result, verb):
         shown = clean(name)
         if result["status"] == "ok":
-            where = f" as {result['archive_id']}; `bus unarchive {result['archive_id']}` brings it back" if verb == "archive" else ""
-            self.say(f"{DONE[verb]} {shown}{where}")
+            undo = bus_command(self.url, "unarchive", result["archive_id"]) if verb == "archive" else ""
+            self.say(f"{DONE[verb]} {shown}" + (f" as {result['archive_id']}; `{undo}` brings it back" if undo else ""))
         elif result["status"] == "present":
-            self.say(f"{shown} has {result['present']} member(s) present; `bus {verb} --room {name} --force` does it anyway")
+            force = bus_command(self.url, verb, "--room", name, "--force")
+            self.say(f"{shown} has {result['present']} member(s) present; `{force}` does it anyway")
         else:
             self.say(f"{shown} is already gone")
         self.poll()
@@ -1160,11 +1204,12 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def browse(r, room, idle_hours, retain_seconds):
-    """Picker and boards take turns: the picker exits with a room name, a board exits with PICKER on `b`."""
+def browse(r, room, url=bus.DEFAULT_URL):
+    """Picker and boards take turns: the picker exits with a room name, a board exits with PICKER on `b`.
+    The BUS_ARCHIVE_* settings are read only when a picker opens, so a board never trips over them."""
     while True:
         if room is None:
-            room = RoomPicker(r, idle_hours, retain_seconds).run()
+            room = RoomPicker(r, bus.archive_idle_hours(), bus.archive_retain_seconds(), url=url).run()
             if room is None:
                 return
         if SwarmBoard(r, room).run() != PICKER:
@@ -1179,7 +1224,7 @@ def main(argv=None):
     except redis.RedisError as exc:
         sys.stderr.write(f"swarm-board: cannot reach Redis at {args.url}: {exc}\n")
         return 1
-    browse(r, args.room, bus.archive_idle_hours(), bus.archive_retain_seconds())
+    browse(r, args.room, args.url)
     return 0
 
 
