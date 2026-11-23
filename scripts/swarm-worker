@@ -118,7 +118,7 @@ class Worker:
         while time.monotonic() < deadline:
             bus.touch_presence(self.r, self.room, self.agent)
             delivered, last_seen = bus.read_from_cursor(self.r, self.room, self.agent, block_ms=bus.BLOCK_CHUNK_MS)
-            delivered = [m for m in delivered if m["kind"] != ECHO]
+            delivered = [m for m in delivered if m["kind"] != ECHO or bus.is_stop(m)]
             if delivered:
                 return delivered, last_seen
             if last_seen:

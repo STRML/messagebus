@@ -230,6 +230,19 @@ class SwarmWorkerE2E(BusE2E):
         replies = [(p["from"], p["to"], p["kind"]) for p in self.posts() if p["from"] in ("w1", "w2")][-2:]
         self.assertEqual([k for _, _, k in replies], ["auto", "echo"])
 
+    def test_send_refuses_the_worker_kinds(self):
+        for kind in ("auto", "echo"):
+            res = self.bus("send", "--from", "coord", "--to", "w1", "--kind", kind, "hi")
+            self.assertEqual(res.returncode, 2)
+            self.assertIn("reserved", res.stderr)
+        self.assertEqual(self.posts(), [])
+
+    def test_shutdown_posted_as_echo_still_stops_the_worker(self):
+        p = self.start_worker()
+        self.r.xadd(f"bus:stream:{self.room}", {"from": "coord", "to": "all", "kind": "echo", "body": "__SHUTDOWN__",
+                                                "ts": "", "topic": "", "reply_to": ""})
+        p.wait(timeout=20)
+
     def test_second_worker_with_same_id_refuses(self):
         self.start_worker()
         self.wait_for(lambda: self.member().get("state") == "waiting")
