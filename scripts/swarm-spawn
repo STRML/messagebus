@@ -9,9 +9,11 @@ Without --harness, the role's intelligence band in the swarm config picks the mo
 unused quota (the config's `picker` command) serves one (see examples/swarm.yaml). The member joins with
 --replay before its worker starts, so the brief and anything posted earlier reach it. Prints one JSON line:
 {"agent", "harness", "model", "pid", "log"}. Exits 3 when that member's worker is already running; a member whose
-worker is gone is respawned with its cursor kept.
+worker is gone is respawned with its cursor kept. Exits 4, before joining anyone, when run inside a macOS sandbox,
+since the worker and every seat it starts would inherit it.
 """
 import argparse
+import ctypes
 import importlib.machinery
 import importlib.util
 import json
@@ -78,6 +80,22 @@ def state_dir(args):
     path = os.path.join(os.environ.get("BUS_DIR", os.path.join(ROOT, ".bus-state")), args.room)
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def sandboxed():
+    """True inside a macOS Seatbelt sandbox. Children inherit it and cannot drop it, so a worker started from here would
+    run every seat sandboxed (git index writes and process signals denied)."""
+    if sys.platform != "darwin":
+        return False
+    return ctypes.CDLL("/usr/lib/libSystem.B.dylib").sandbox_check(os.getpid(), None, 0) != 0
+
+
+def refuse_if_sandboxed():
+    if not sandboxed():
+        return
+    sys.stderr.write("swarm-spawn: running inside a sandbox, which every member would inherit; nothing was spawned. "
+                     "Run swarm-spawn with the sandbox disabled (Claude Code: dangerouslyDisableSandbox).\n")
+    sys.exit(4)
 
 
 def refuse_if_running(args):
@@ -157,6 +175,7 @@ def main():
     p.add_argument("--from", dest="frm", type=bus.ident, default="coordinator", help="who posts the brief")
     p.add_argument("--base", help="ref the member's work starts from; read-only seats see the commits since it")
     args = p.parse_args()
+    refuse_if_sandboxed()
     refuse_if_running(args)
     cfg = swarm_config.load()
     r = bus.connect(args.url)

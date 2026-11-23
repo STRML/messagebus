@@ -76,6 +76,10 @@ the `bus` on your PATH is this checkout.
 The worker commits its cursor after the wake, not before. A worker killed mid-wake and respawned with `swarm-spawn`
 gets the same posts again.
 
+Run `swarm-spawn` unsandboxed, respawns included. A worker and its seats inherit the macOS sandbox `swarm-spawn` runs
+in, and a child process can't drop it, so every seat would be denied git index writes and process signals. Inside a
+sandbox, `swarm-spawn` exits 4 before it joins anyone.
+
 | seat kind | first wake | later wakes |
 |---|---|---|
 | `claude` | `<launcher> -p --output-format json --session-id <uuid>` | `--resume <uuid>` |

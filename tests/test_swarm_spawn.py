@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import subprocess
+import shutil
 import sys
 import unittest
 
@@ -150,6 +151,16 @@ class SwarmSpawnE2E(BusE2E):
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("took over 20s", res.stderr)
         self.assertFalse(self.r.exists(f"bus:member:{self.room}:w1"))
+
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("sandbox-exec"), "macOS Seatbelt only")
+    def test_spawn_refuses_inside_a_sandbox_before_joining(self):
+        res = subprocess.run(["sandbox-exec", "-p", "(version 1)(allow default)", sys.executable, SPAWN, "--url", URL,
+                              "--room", self.room, "--as", "w1", "--harness", "cmd"],
+                             capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(res.returncode, 4, res.stderr)
+        self.assertIn("sandbox", res.stderr)
+        self.assertFalse(self.r.exists(f"bus:member:{self.room}:w1"))
+        self.assertEqual(self.r.xlen(f"bus:stream:{self.room}"), 0)
 
     def test_spawn_rejects_unknown_seat(self):
         res = subprocess.run([sys.executable, SPAWN, "--url", URL, "--room", self.room, "--as", "w3",

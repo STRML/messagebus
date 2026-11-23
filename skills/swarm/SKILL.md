@@ -48,8 +48,8 @@ scripts/swarm-spawn --room $R --as verifier --role verifier --workspace <worktre
 ```
 
 Each call prints the seat it picked (`harness`, `model`), the worker's pid and its log path. Pass `--harness` and
-`--model` only when the operator names a seat. Spawned members run outside your sandbox, so run `swarm-spawn` with the
-sandbox disabled when the session has one.
+`--model` only when the operator names a seat. Members inherit the sandbox `swarm-spawn` runs in, so run it with the
+sandbox disabled when the session has one, respawns included. Inside a sandbox it exits 4 and spawns nothing.
 
 ## 5. Watch and answer
 
