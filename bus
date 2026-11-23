@@ -389,6 +389,11 @@ def addressed_to(to, agent, groups=()):
     return agent in mentions or bool(mentions & set(groups))
 
 
+# Kinds only swarm-worker posts: "auto" for a seat's final text it posts on the seat's behalf, "echo" for one that
+# answers auto posts and must wake no one (scripts/swarm-worker, auto_kind).
+WORKER_KINDS = ("auto", "echo")
+
+
 def is_stop(msg):
     return msg["body"].strip() == SHUTDOWN or msg.get("kind") == "done"
 
@@ -435,6 +440,9 @@ def cmd_send(r, args):
         body = sys.stdin.read()
     if not body:
         sys.stderr.write("bus send: empty body\n")
+        return 2
+    if args.kind in WORKER_KINDS:
+        sys.stderr.write(f"bus send: --kind {args.kind} is reserved for swarm-worker's own posts\n")
         return 2
     fields = make_fields(args.frm, args.to, body.strip(),
                          kind=args.kind, topic=args.topic or "",

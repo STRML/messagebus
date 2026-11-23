@@ -220,6 +220,29 @@ class SwarmWorkerE2E(BusE2E):
         self.assertEqual(post["to"], "coord")
         self.assertEqual(post["body"], "final answer from the seat")
 
+    def test_two_seats_that_never_post_stop_after_one_echo(self):
+        self.start_worker("w1", FAKE_NO_POST="1")
+        self.start_worker("w2", FAKE_NO_POST="1")
+        self.bus("send", "--from", "w2", "--to", "w1", "are you done?")
+        self.wait_for(lambda: len(self.seat_calls()) >= 2)
+        time.sleep(5)
+        self.assertEqual(len(self.seat_calls()), 2)
+        replies = [(p["from"], p["to"], p["kind"]) for p in self.posts() if p["from"] in ("w1", "w2")][-2:]
+        self.assertEqual([k for _, _, k in replies], ["auto", "echo"])
+
+    def test_send_refuses_the_worker_kinds(self):
+        for kind in ("auto", "echo"):
+            res = self.bus("send", "--from", "coord", "--to", "w1", "--kind", kind, "hi")
+            self.assertEqual(res.returncode, 2)
+            self.assertIn("reserved", res.stderr)
+        self.assertEqual(self.posts(), [])
+
+    def test_shutdown_posted_as_echo_still_stops_the_worker(self):
+        p = self.start_worker()
+        self.r.xadd(f"bus:stream:{self.room}", {"from": "coord", "to": "all", "kind": "echo", "body": "__SHUTDOWN__",
+                                                "ts": "", "topic": "", "reply_to": ""})
+        self.assertEqual(p.wait(timeout=20), 0)
+
     def test_second_worker_with_same_id_refuses(self):
         self.start_worker()
         self.wait_for(lambda: self.member().get("state") == "waiting")
