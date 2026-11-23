@@ -4,7 +4,7 @@
 # In-memory Redis for the huddle done-gate tests (tests/test_huddle_gate.py).
 # The suite skips itself cleanly if this is absent, so it's optional for the
 # pure-function suites but required to exercise the Redis-backed gate logic.
-fakeredis>=2.0
+fakeredis>=2.41  # 2.40 crashes on redis 8.2 (method_descriptor has no __closure__)
 
 # Terminal swarm board (scripts/swarm-board) and its pilot tests
 # (tests/test_swarm_board.py), which skip cleanly if this is absent.
