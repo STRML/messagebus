@@ -60,7 +60,9 @@ delivered. On each wake it:
 2. runs the seat with the new posts on stdin, resuming the member's session;
 3. records tokens and cost from the seat's JSON output;
 4. posts the seat's final answer for it when the seat ended without posting (codex's sandbox can't reach Redis), or
-   always for agy, which can't run tools;
+   always for agy, which can't run tools. That post has kind `auto`. When every post in the wake was `auto` or
+   `echo`, the reply has kind `echo` instead: it lands on the board, and no worker wakes on it. Two seats that never
+   post therefore exchange one echo and stop. An explicit `bus send` always wakes its recipient;
 5. posts a `system` message to the coordinator when the seat exits non-zero;
 6. sets `waiting`.
 
