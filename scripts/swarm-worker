@@ -118,6 +118,7 @@ class Worker:
         while time.monotonic() < deadline:
             bus.touch_presence(self.r, self.room, self.agent)
             delivered, last_seen = bus.read_from_cursor(self.r, self.room, self.agent, block_ms=bus.BLOCK_CHUNK_MS)
+            delivered = [m for m in delivered if m["kind"] != ECHO]
             if delivered:
                 return delivered, last_seen
             if last_seen:
@@ -180,7 +181,7 @@ class Worker:
         if result.returncode:
             self.report_crash(result)
         elif self.replies_on_stdout() or not self.posted_since(head):
-            self.post(senders(msgs), parsed["text"] or result.stdout.strip() or "(no output)")
+            self.post(senders(msgs), parsed["text"] or result.stdout.strip() or "(no output)", kind=auto_kind(msgs))
         self.set_state("waiting")
 
     def stream_head(self):
@@ -249,6 +250,16 @@ class Worker:
             self.wake(msgs)
         except Exception as e:  # a worker that dies here leaves the member stuck at `working` with its posts consumed
             self.report_crash(failed([], 1, f"swarm-worker error: {type(e).__name__}: {e}"))
+
+
+AUTO = "auto"
+ECHO = "echo"
+
+
+def auto_kind(msgs):
+    """The worker posts a seat's final text for it when the seat posted nothing. Two such seats would answer each
+    other's posts forever, so a reply to auto posts alone is an echo: it lands on the board and wakes no worker."""
+    return ECHO if all(m["kind"] in (AUTO, ECHO) for m in msgs) else AUTO
 
 
 # ---- seats: (worker, prompt, session id) -> (argv, stdin, env) -----------------
