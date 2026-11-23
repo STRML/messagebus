@@ -241,7 +241,7 @@ class SwarmWorkerE2E(BusE2E):
         p = self.start_worker()
         self.r.xadd(f"bus:stream:{self.room}", {"from": "coord", "to": "all", "kind": "echo", "body": "__SHUTDOWN__",
                                                 "ts": "", "topic": "", "reply_to": ""})
-        p.wait(timeout=20)
+        self.assertEqual(p.wait(timeout=20), 0)
 
     def test_second_worker_with_same_id_refuses(self):
         self.start_worker()
