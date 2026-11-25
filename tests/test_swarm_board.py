@@ -461,6 +461,35 @@ class SwarmBoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("coordinator", detail.split("\n")[0])
             self.assertIn("last post", detail)
 
+    async def test_roster_grid_arrows_and_active_pane_indicator(self):
+        for name in ("w2", "w3"):
+            self.member(name, role="worker", model="claude-sonnet-5-5", state="working")
+        app = self.make_app()
+        async with app.run_test(size=SIZE) as pilot:
+            await self.load(app, pilot)
+            # Active pane class tracks focus cleanly.
+            self.assertTrue(app.query_one("#posts").has_class("active-pane"))
+            self.assertFalse(app.query_one("#roster").has_class("active-pane"))
+            await pilot.press("tab", "tab")
+            self.assertEqual(app.state.focus, "roster")
+            self.assertTrue(app.query_one("#roster").has_class("active-pane"))
+            self.assertFalse(app.query_one("#posts").has_class("active-pane"))
+            # 5 members in 3-col grid: row 0 = [coordinator, verifier, w1], row 1 = [w2, w3].
+            self.assertEqual(app.state.active(), ["coordinator", "verifier", "w1", "w2", "w3"])
+            # Move to coordinator (index 0), then test right/down/left/up.
+            app.state.member = "coordinator"
+            await pilot.press("right")
+            self.assertEqual(app.state.member_name(), "verifier")
+            await pilot.press("down")
+            self.assertEqual(app.state.member_name(), "w3")
+            await pilot.press("left")
+            self.assertEqual(app.state.member_name(), "w2")
+            await pilot.press("up")
+            self.assertEqual(app.state.member_name(), "coordinator")
+            # Down from col 2 (w1) clamps cleanly to partial bottom row (w3).
+            await pilot.press("right", "right", "down")
+            self.assertEqual(app.state.member_name(), "w3")
+
     async def test_detail_block_for_member(self):
         app = self.make_app()
         async with app.run_test(size=SIZE) as pilot:

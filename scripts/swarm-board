@@ -48,7 +48,8 @@ bus = load_bus()
 PALETTE = ["#ff7b72", "#7ee787", "#79c0ff", "#d2a8ff", "#56d4dd", "#ff9bce", "#f0883e", "#c9a27e", "#d8dee9"]
 GLYPHS = "◆▲■✦⬢◗"
 GREEN, DIM, BLUE, GOLD = "#3fb950", "#8b949e", "#79c0ff", "#f2cc60"
-SELECTED_BG = "on #1f2a3a"
+SELECTED_BG = "on #1f334d"
+UNFOCUSED_BG = "on #11161d"
 CARD_COLUMNS = 3
 CARD_LINES = 4
 AVATAR_WIDTH = 5
@@ -230,7 +231,7 @@ MIN_RECIPIENT_WIDTH = 4
 ROSTER_ROWS = 2
 EXPANDED_CAP = 20
 PAGE_FALLBACK = 10
-HINTS = ("tab pane · enter hide msg · space expand · p filter · "
+HINTS = ("←→↑↓ move · tab pane · enter hide msg · space expand · p filter · "
          "o open · f follow · z zoom · b rooms · esc back")
 PICKER_HINTS = "enter open board · a archive · x clear · r refresh · q quit"
 PICKER = "picker"
@@ -579,6 +580,32 @@ class BoardState:
         index = names.index(current) if current in names else 0
         self.member = names[clamp(index + delta, 0, len(names) - 1)]
 
+    def move_member_grid(self, dx, dy):
+        """Move selection in the CARD_COLUMNS roster grid.
+
+        Left/right steps by ±1 across the grid. Up/down moves by whole rows when
+        there are multiple rows (clamping onto a shorter final row), and falls
+        back to ±1 when all active members sit on a single row.
+        """
+        names = self.active()
+        if not names:
+            return
+        current = self.member_name()
+        index = names.index(current) if current in names else 0
+        if dx:
+            target = clamp(index + dx, 0, len(names) - 1)
+        elif dy:
+            if len(names) <= CARD_COLUMNS:
+                target = clamp(index + dy, 0, len(names) - 1)
+            else:
+                row, col = divmod(index, CARD_COLUMNS)
+                max_row = (len(names) - 1) // CARD_COLUMNS
+                new_row = clamp(row + dy, 0, max_row)
+                target = min(new_row * CARD_COLUMNS + col, len(names) - 1)
+        else:
+            target = index
+        self.member = names[target]
+
     def move_post(self, delta):
         visible = self.visible()
         if not visible:
@@ -699,7 +726,7 @@ def header_text(state):
 
 
 def label_text(label, focused):
-    return Text(label, style="bold #c9d1d9" if focused else DIM)
+    return Text(label, style=f"bold {BLUE}" if focused else DIM)
 
 
 def roster_label(state):
@@ -759,8 +786,9 @@ def card_lines(state, name, colw, selected, now):
     else:
         lines = body
     if selected:
+        bg = SELECTED_BG if state.focus == "roster" else UNFOCUSED_BG
         for line in lines:
-            line.stylize(SELECTED_BG)
+            line.stylize(bg)
     return lines
 
 
@@ -871,7 +899,7 @@ def posts_label(state):
 def post_row(post, state, widths, selected, focused):
     seq_w, cell_w, stamp_w, width, now = widths
     row = Text()
-    row.append("> " if selected else "  ", style="bold " + GREEN)
+    row.append("> " if selected else "  ", style=("bold " + GREEN) if focused else DIM)
     row.append(f"#{post.seq:<{seq_w}}  ", style=DIM)
     row.append(f"{fmt_when(post.ms, now):<{stamp_w}}  ", style=DIM)
     row.append_text(fit(sender_cell(post, state, cell_w), cell_w))
@@ -883,7 +911,7 @@ def post_row(post, state, widths, selected, focused):
     row.append_text(style_inline(first, state))
     fit(row, width)
     if selected:
-        row.stylize(SELECTED_BG if focused else "on #161b22")
+        row.stylize(SELECTED_BG if focused else UNFOCUSED_BG)
     return row
 
 
@@ -969,14 +997,21 @@ class Pane(Static, can_focus=True):
     def on_resize(self, event):
         self.app.render_all()
 
+    def on_click(self, event):
+        if self.id in PANES and self.app.state.focus != self.id:
+            self.app.state.focus = self.id
+            self.app.refresh_board()
+
 
 class SwarmBoard(App):
     CSS = """
     Screen { background: #0b0e14; color: #c9d1d9; }
-    Rule { margin: 0; color: #30363d; }
+    Rule { margin: 0; color: #21262d; }
     #top { height: auto; }
     #roster, #detail { height: auto; }
-    #detail { padding-top: 1; }
+    #detail { padding-top: 1; padding-left: 1; }
+    #roster, #posts, #message { border-left: outer #21262d; }
+    #roster.active-pane, #posts.active-pane, #message.active-pane { border-left: outer #58a6ff; }
     #posts-sec { height: 2fr; }
     #msg-sec { height: 3fr; }
     #posts, #message { height: 1fr; }
@@ -985,6 +1020,8 @@ class SwarmBoard(App):
     """
     BINDINGS = [
         Binding("tab", "next_pane", "switch pane", priority=True),
+        Binding("left,h", "move_horiz(-1)", "left", show=False),
+        Binding("right,l", "move_horiz(1)", "right", show=False),
         Binding("up,k", "move(-1)", "up", show=False),
         Binding("down,j", "move(1)", "down", show=False),
         Binding("pageup", "page(-1)", "page up", show=False),
@@ -1106,6 +1143,8 @@ class SwarmBoard(App):
         self.query_one("#top").display = not st.zoom
         self.query_one("#posts-sec").display = not st.zoom
         self.query_one("#msg-sec").display = st.show_message or st.zoom
+        for pane_id in PANES:
+            self.query_one(f"#{pane_id}").set_class(pane_id == st.focus, "active-pane")
         self.query_one(f"#{st.focus}").focus()
 
     def refresh_board(self):
@@ -1116,10 +1155,15 @@ class SwarmBoard(App):
         self.state.cycle_focus()
         self.refresh_board()
 
+    def action_move_horiz(self, delta):
+        if self.state.focus == "roster":
+            self.state.move_member_grid(delta, 0)
+            self.render_all()
+
     def action_move(self, delta):
         st = self.state
         if st.focus == "roster":
-            st.move_member(delta)
+            st.move_member_grid(0, delta)
         elif st.focus == "posts":
             st.move_post(delta)
         else:
