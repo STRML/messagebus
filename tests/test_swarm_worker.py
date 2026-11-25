@@ -28,7 +28,9 @@ FAKE_SEAT = textwrap.dedent("""\
     prompt = sys.stdin.read()
     log = os.environ["FAKE_LOG"]
     with open(log, "a") as f:
-        f.write(json.dumps({"session": os.environ.get("SWARM_SESSION", ""), "prompt": prompt}) + "\\n")
+        cmux = sorted(k for k in os.environ if k.startswith("CMUX_"))
+        f.write(json.dumps({"session": os.environ.get("SWARM_SESSION", ""), "prompt": prompt,
+                            "cmux": cmux, "path": os.environ.get("PATH", "")}) + "\\n")
     if "SLEEP" in prompt:
         import time
         time.sleep(30)
@@ -250,6 +252,29 @@ class SwarmWorkerE2E(BusE2E):
                              capture_output=True, text=True, timeout=15)
         self.assertEqual(dup.returncode, 3)
         self.assertIn("already running", dup.stderr)
+
+    def test_recovery_after_crash_clears_crashed_doing(self):
+        self.start_worker(SWARM_COORDINATOR="coord")
+        self.bus("send", "--from", "coord", "--to", "w1", "CRASH please")
+        self.system_post()
+        self.wait_for(lambda: "crashed" in self.member().get("doing", ""))
+        self.bus("send", "--from", "coord", "--to", "w1", "try again")
+        self.wait_for(lambda: self.member().get("turns") == "2")
+        self.wait_for(lambda: self.member().get("state") == "waiting")
+        self.assertEqual(self.member().get("doing"), "")
+
+    def test_strips_cmux_env_and_shims_from_seat(self):
+        shim_dir = "/Users/example/.cmuxterm/cmux-cli-shims/A3FC0592"
+        self.start_worker(
+            CMUX_SURFACE_ID="A3FC0592-851C-40D7-BADF-28B97ECCCB22",
+            CMUX_PANEL_ID="panel-1",
+            PATH=f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        )
+        self.bus("send", "--from", "coord", "--to", "w1", "ping")
+        self.wait_for(lambda: self.member().get("turns") == "1")
+        call = self.seat_calls()[0]
+        self.assertEqual(call["cmux"], [])
+        self.assertNotIn("cmux-cli-shims", call["path"])
 
 
 if __name__ == "__main__":

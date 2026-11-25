@@ -105,7 +105,7 @@ class Worker:
     # ---- bus ------------------------------------------------------------------
     def set_state(self, state, doing=None):
         fields = {"state": state, "state_at": bus.now_iso()}
-        if doing:
+        if doing is not None:
             fields["doing"] = doing
         self.r.hset(bus.k_member(self.room, self.agent), mapping=fields)
         bus.touch_presence(self.r, self.room, self.agent)
@@ -167,7 +167,7 @@ class Worker:
             return failed(argv, 127, f"could not start the seat: {type(e).__name__}: {e}")
 
     def wake(self, msgs):
-        self.set_state("working")
+        self.set_state("working", doing="")
         head = self.stream_head()
         stop = threading.Event()
         threading.Thread(target=self.heartbeat, args=(stop,), daemon=True).start()
@@ -264,9 +264,12 @@ def auto_kind(msgs):
 
 # ---- seats: (worker, prompt, session id) -> (argv, stdin, env) -----------------
 def base_env(w, sid):
-    path = os.pathsep.join([os.path.dirname(BUS_PATH), os.path.dirname(sys.executable), os.environ.get("PATH", "")])
-    return dict(os.environ, SWARM_AGENT=w.agent, SWARM_SESSION=sid, BUS_ROOM=w.room, PATH=path,
-                CLAUDECODE="", CLAUDE_CODE_ENTRYPOINT="")
+    raw_path = os.pathsep.join([os.path.dirname(BUS_PATH), os.path.dirname(sys.executable), os.environ.get("PATH", "")])
+    path = os.pathsep.join(p for p in raw_path.split(os.pathsep) if p and "/cmux-cli-shims" not in p)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CMUX_")}
+    env.update(SWARM_AGENT=w.agent, SWARM_SESSION=sid, BUS_ROOM=w.room, PATH=path,
+               CLAUDECODE="", CLAUDE_CODE_ENTRYPOINT="")
+    return env
 
 
 def claude_seat(w, prompt, sid):
