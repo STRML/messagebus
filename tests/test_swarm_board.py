@@ -550,6 +550,57 @@ class PureHelperTests(unittest.TestCase):
         self.assertEqual(board.ago(0, 180), "3m ago")
         self.assertEqual(board.ago(0, 7200), "2h ago")
 
+    @unittest.skipIf(fakeredis is None, "fakeredis/textual not installed")
+    def test_vendor_detection_and_avatar_cell_widths(self):
+        from rich.cells import cell_len
+        cases = [
+            ({"model": "gemini-4-neon-high", "harness": "agy"}, "gemini"),
+            ({"model": "gemini-4-hydrogen-xhigh"}, "gemini"),
+            ({"model": "claude-sonnet-5-5", "harness": "claude-sigint"}, "claude"),
+            ({"model": "claude-opus-5-5"}, "claude"),
+            ({"model": "gpt-6.2-sol", "harness": "codex"}, "codex"),
+            ({"model": "gpt-6.1-terra"}, "codex"),
+            ({"model": "studio-local/DeepSeek-V4.1-Flash-1017-MLX-Serve-iQ-MLX-3.0bpw", "harness": "omp"}, "deepseek"),
+            ({"model": "deepseek/deepseek-flash", "harness": "omp"}, "deepseek"),
+            ({"model": "neuralwatt/glm-5.3-flash", "harness": "omp"}, "omp"),
+            ({"model": "unknown-model", "harness": "cmd"}, "generic"),
+        ]
+        for info, expected in cases:
+            with self.subTest(info=info):
+                self.assertEqual(board.vendor_of(info), expected)
+
+        for vendor, spec in board.AVATARS.items():
+            for frame in (*spec["working"], *spec["waiting"], spec["dim"]):
+                self.assertEqual(len(frame), board.CARD_LINES, f"{vendor} frame height")
+                for row in frame:
+                    self.assertEqual(cell_len(row), board.AVATAR_WIDTH, f"{vendor} row {row!r} width")
+
+    @unittest.skipIf(fakeredis is None, "fakeredis/textual not installed")
+    def test_avatar_animation_and_distinct_member_tints(self):
+        st = board.BoardState("r")
+        st.members = {
+            "bee": {"model": "gemini-4-hydrogen-high", "harness": "agy", "state": "working", "present": True},
+            "clawd-1": {"model": "claude-sonnet-5-5", "harness": "claude-sigint", "state": "waiting", "present": True},
+            "clawd-2": {"model": "claude-sonnet-5-5", "harness": "claude-rush", "state": "working", "present": True},
+            "whale": {"model": "deepseek/deepseek-flash", "harness": "omp", "state": "working", "present": True},
+            "codex": {"model": "gpt-6.2-sol", "harness": "codex", "state": "working", "present": True},
+            "gone-w": {"model": "claude-opus-5-5", "harness": "claude", "state": "working", "present": False},
+        }
+        st.assign_colors()
+        bee_frames = {tuple(t.plain for t in board.avatar_lines(st, "bee", f)) for f in range(4)}
+        whale_frames = {tuple(t.plain for t in board.avatar_lines(st, "whale", f)) for f in range(4)}
+        codex_frames = {tuple(t.plain for t in board.avatar_lines(st, "codex", f)) for f in range(4)}
+        sleep_frames = {tuple(t.plain for t in board.avatar_lines(st, "clawd-1", f)) for f in range(8)}
+        gone_frames = {tuple(t.plain for t in board.avatar_lines(st, "gone-w", f)) for f in range(8)}
+        self.assertGreaterEqual(len(bee_frames), 3)
+        self.assertGreaterEqual(len(whale_frames), 3)
+        self.assertGreaterEqual(len(codex_frames), 3)
+        self.assertGreaterEqual(len(sleep_frames), 3)
+        self.assertEqual(len(gone_frames), 1)
+        c1 = board.avatar_color(st, "clawd-1", board.AVATARS["claude"])
+        c2 = board.avatar_color(st, "clawd-2", board.AVATARS["claude"])
+        self.assertNotEqual(c1, c2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,7 +51,180 @@ GREEN, DIM, BLUE, GOLD = "#3fb950", "#8b949e", "#79c0ff", "#f2cc60"
 SELECTED_BG = "on #1f2a3a"
 CARD_COLUMNS = 3
 CARD_LINES = 4
+AVATAR_WIDTH = 5
+AVATAR_MIN_COLW = 24
+ANIM_INTERVAL = 0.35
 DOING_STYLE = "italic #8b949e"
+
+# 4x5 single-width Unicode avatars per model/harness family:
+#   gemini/agy -> little bee, claude -> Clawd mascot, codex/gpt -> rotating hex-knot,
+#   deepseek/studio -> spouting whale, omp/glm/kimi -> pulsing orbital node, generic -> diamond.
+# Each vendor has a small palette of distinct tints so parallel workers of the same vendor look distinct,
+# brisk working frames, and calm half-speed sleeping frames (`z`/`Z`).
+AVATARS = {
+    "gemini": {
+        "colors": ("#f2cc60", "#ffd866", "#f0b429", "#ffe082"),
+        "accent": "#79c0ff",
+        "working": (
+            ("╲ ✧ ╱", "╭█═█╮", "╰█═█╯", " · · "),
+            ("  ✦  ", "═█═█═", "╰█═█╯", " · · "),
+            ("  ·  ", "╭█═█╮", "╱█═█╲", " · · "),
+            ("  ✧  ", "═█═█═", "╰█═█╯", " · · "),
+        ),
+        "waiting": (
+            ("   z ", "╭█═█╮", "╰█═█╯", "     "),
+            ("  zZ ", "╭█═█╮", "╰█═█╯", "     "),
+            ("   Z ", "╭█═█╮", "╰█═█╯", "     "),
+            ("   · ", "╭█═█╮", "╰█═█╯", "     "),
+        ),
+        "dim":     ("     ", "╭█═█╮", "╰█═█╯", "     "),
+    },
+    "claude": {
+        "colors": ("#d97757", "#e8916f", "#cc6b49", "#f0a07c"),
+        "accent": "#f2cc60",
+        "working": (
+            ("  ✦  ", "▐▛▀▜▌", "▐███▌", " ▘ ▝ "),
+            ("▐▛▀▜▌", "▐███▌", " ▘ ▝ ", "  ·  "),
+            ("  ✧  ", "▐▛─▜▌", "▐███▌", " ▘ ▝ "),
+            ("  ·  ", "▐▛▀▜▌", "▐███▌", "▘   ▝"),
+        ),
+        "waiting": (
+            ("   z ", "▐▛─▜▌", "▐███▌", " ▘ ▝ "),
+            ("  zZ ", "▐▛─▜▌", "▐███▌", " ▘ ▝ "),
+            ("   Z ", "▐▛─▜▌", "▐███▌", " ▘ ▝ "),
+            ("   · ", "▐▛─▜▌", "▐███▌", " ▘ ▝ "),
+        ),
+        "dim":     ("     ", "▐▛─▜▌", "▐███▌", " ▘ ▝ "),
+    },
+    "codex": {
+        "colors": ("#10a37f", "#34d399", "#2dd4bf", "#4ade80"),
+        "accent": "#7ee787",
+        "working": (
+            (" ╭─╮ ", "╱ ◎ ╲", "╲ ◉ ╱", " ╰─╯ "),
+            (" ╭◈╮ ", "│╲ ╱│", "│╱ ╲│", " ╰◈╯ "),
+            (" ╭─╮ ", "╱ ◉ ╲", "╲ ◎ ╱", " ╰─╯ "),
+            (" ╭·╮ ", "│╱ ╲│", "│╲ ╱│", " ╰·╯ "),
+        ),
+        "waiting": (
+            ("   z ", " ╭─╮ ", " │─│ ", " ╰─╯ "),
+            ("  zZ ", " ╭─╮ ", " │─│ ", " ╰─╯ "),
+            ("   Z ", " ╭─╮ ", " │─│ ", " ╰─╯ "),
+            ("   · ", " ╭─╮ ", " │─│ ", " ╰─╯ "),
+        ),
+        "dim":     (" ╭─╮ ", "│ · │", "│   │", " ╰─╯ "),
+    },
+    "deepseek": {
+        "colors": ("#58a6ff", "#4d6bfe", "#38bdf8", "#60a5fa"),
+        "accent": "#56d4dd",
+        "working": (
+            (" ╲│╱ ", "╭───╮", "█ ◉ █", "╰═══╯"),
+            ("· · ·", "╭───╮", "█ ◉ █", "╰═══╯"),
+            ("  │  ", "╭───╮", "█ ◉ █", "╰═~═╯"),
+            (" ·│· ", "╭───╮", "█ ◉ █", "╰~═~╯"),
+        ),
+        "waiting": (
+            ("   z ", "╭───╮", "█ ─ █", "╰═══╯"),
+            ("  zZ ", "╭───╮", "█ ─ █", "╰═══╯"),
+            ("   Z ", "╭───╮", "█ ─ █", "╰═══╯"),
+            ("   · ", "╭───╮", "█ ─ █", "╰═══╯"),
+        ),
+        "dim":     ("     ", "╭───╮", "█ ─ █", "╰═══╯"),
+    },
+    "omp": {
+        "colors": ("#d2a8ff", "#c084fc", "#a78bfa", "#e879f9"),
+        "accent": "#56d4dd",
+        "working": (
+            ("  ·  ", "╭─◈─╮", "╰─○─╯", "  ·  "),
+            ("  ✦  ", "╭─○─╮", "╰─◈─╯", "  ✧  "),
+            (" · · ", "╭─◉─╮", "╰─◉─╯", " · · "),
+            ("  ✧  ", "╭─◈─╮", "╰─○─╯", "  ✦  "),
+        ),
+        "waiting": (
+            ("   z ", "╭─○─╮", "╰─○─╯", "     "),
+            ("  zZ ", "╭─○─╮", "╰─○─╯", "     "),
+            ("   Z ", "╭─○─╮", "╰─○─╯", "     "),
+            ("   · ", "╭─○─╮", "╰─○─╯", "     "),
+        ),
+        "dim":     ("     ", "╭─·─╮", "╰─·─╯", "     "),
+    },
+    "generic": {
+        "colors": (),
+        "accent": None,
+        "working": (
+            ("  ✦  ", " ╱◇╲ ", " ╲◇╱ ", "  ·  "),
+            ("  ·  ", " ╱◈╲ ", " ╲◈╱ ", "  ✧  "),
+            ("  ✧  ", " ╱◆╲ ", " ╲◆╱ ", "  ·  "),
+            ("  ·  ", " ╱◈╲ ", " ╲◈╱ ", "  ✦  "),
+        ),
+        "waiting": (
+            ("   z ", " ╱◇╲ ", " ╲◇╱ ", "     "),
+            ("  zZ ", " ╱◇╲ ", " ╲◇╱ ", "     "),
+            ("   Z ", " ╱◇╲ ", " ╲◇╱ ", "     "),
+            ("   · ", " ╱◇╲ ", " ╲◇╱ ", "     "),
+        ),
+        "dim":     ("     ", " ╱·╲ ", " ╲·╱ ", "     "),
+    },
+}
+
+
+def vendor_of(info):
+    """Identify the avatar family from a member's model (preferred) or harness."""
+    model = (info.get("model") or "").lower()
+    harness = (info.get("harness") or "").lower()
+    for text in (model, harness):
+        if not text:
+            continue
+        if any(k in text for k in ("deepseek", "ds4", "studio-local", "studio/")):
+            return "deepseek"
+        if any(k in text for k in ("gemini", "agy", "antigravity", "hydrogen", "neon", "carbon", "argon")):
+            return "gemini"
+        if any(k in text for k in ("claude", "haiku", "sonnet", "opus", "fable", "anthropic")):
+            return "claude"
+        if any(k in text for k in ("codex", "gpt", "openai", "luna", "terra", "sol", "astra")):
+            return "codex"
+        if any(k in text for k in ("omp", "glm", "kimi", "neuralwatt")):
+            return "omp"
+    return "generic"
+
+
+def avatar_color(state, name, spec):
+    colors = spec["colors"]
+    if not colors:
+        return state.color(name)
+    idx = state.colors.get(name)
+    slot = idx if idx is not None else member_hash(name)
+    return colors[slot % len(colors)]
+
+
+def avatar_lines(state, name, frame=0):
+    """Return 4 Rich Text lines (each 5 cells wide) for a member's animated avatar."""
+    info = state.info(name)
+    vendor = vendor_of(info)
+    spec = AVATARS[vendor]
+    status = state.status(name)
+    body_style = avatar_color(state, name, spec)
+    accent_style = spec["accent"] or body_style
+    phase = member_hash(name) % 4
+    if status == "working":
+        frames = spec["working"]
+        rows = frames[(frame + phase) % len(frames)]
+        return [
+            Text(rows[0], style=accent_style),
+            Text(rows[1], style=Style(color=body_style, bold=True)),
+            Text(rows[2], style=body_style),
+            Text(rows[3], style=accent_style),
+        ]
+    if status == "waiting":
+        frames = spec["waiting"]
+        rows = frames[((frame // 2) + phase) % len(frames)]
+        return [
+            Text(rows[0], style=DIM),
+            Text(rows[1], style=body_style),
+            Text(rows[2], style=body_style),
+            Text(rows[3], style=DIM),
+        ]
+    rows = spec["dim"]
+    return [Text(row, style=DIM) for row in rows]
 SENDER_CELL_WIDTH = 28
 MIN_RECIPIENT_WIDTH = 4
 ROSTER_ROWS = 2
@@ -264,6 +437,7 @@ class BoardState:
         self.error = ""
         self.colors = {}
         self.post_rows = None
+        self.frame = 0
 
     def ingest(self, snap):
         if snap.reset:
@@ -546,14 +720,16 @@ def status_text(state, name, now):
     return Text("○ waiting" + suffix, style=DIM)
 
 
-def name_line(state, name, colw):
+def name_line(state, name, colw, show_glyph=True):
     color = state.color(name)
     tokens, cost, _ = state.member_usage(name)
     right = usage_text(tokens, cost)
     crown = " ♛" if state.is_coordinator(name) else ""
-    room = colw - 2 - len(crown) - (len(right) + 1 if right else 0)
+    lead_w = 2 if show_glyph else 0
+    room = colw - lead_w - len(crown) - (len(right) + 1 if right else 0)
     head = Text()
-    head.append(state.glyph(name) + " ", style=color)
+    if show_glyph:
+        head.append(state.glyph(name) + " ", style=color)
     head.append(ellipsize(name, max(room, 4)), style=Style(color=color, bold=True))
     head.append(crown, style=GOLD)
     if right:
@@ -569,10 +745,19 @@ def runtime_text(info):
 
 def card_lines(state, name, colw, selected, now):
     info = state.info(name)
-    status = Text("  ").append_text(status_text(state, name, now))
-    runtime = Text("  " + ellipsize(runtime_text(info), colw - 3), style=DIM)
-    doing = Text("  " + ellipsize(state.doing(name), colw - 3), style=DOING_STYLE)
-    lines = [fit(line, colw) for line in (name_line(state, name, colw), status, runtime, doing)]
+    show_avatar = colw >= AVATAR_MIN_COLW
+    text_w = colw - AVATAR_WIDTH - 1 if show_avatar else colw
+    pad = "" if show_avatar else "  "
+    avail = text_w if show_avatar else max(text_w - 3, 4)
+    status = Text(pad).append_text(status_text(state, name, now))
+    runtime = Text(pad + ellipsize(runtime_text(info), avail), style=DIM)
+    doing = Text(pad + ellipsize(state.doing(name), avail), style=DOING_STYLE)
+    body = [fit(line, text_w) for line in (name_line(state, name, text_w, show_glyph=not show_avatar), status, runtime, doing)]
+    if show_avatar:
+        sprite = avatar_lines(state, name, state.frame)
+        lines = [fit(Text().append_text(sprite[i]).append(" ").append_text(body[i]), colw) for i in range(CARD_LINES)]
+    else:
+        lines = body
     if selected:
         for line in lines:
             line.stylize(SELECTED_BG)
@@ -847,7 +1032,18 @@ class SwarmBoard(App):
         self.query_one("#posts").focus()
         if self.interval:
             self.set_interval(self.interval, self.poll)
+            self.set_interval(ANIM_INTERVAL, self.tick_animation)
         self.poll()
+
+    def tick_animation(self):
+        if not any(self.state.status(n) in ("working", "waiting") for n in self.state.active()):
+            return
+        self.state.frame = (self.state.frame + 1) % 8
+        try:
+            st, now = self.state, time.time()
+            self.query_one("#roster", Pane).update(roster_view(st, self.pane_size("roster")[0], now))
+        except NoMatches:
+            return
 
     def on_resize(self, event):
         self.render_all()
